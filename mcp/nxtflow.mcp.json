@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "nxtflow": {
+      "command": "nxtflow-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "NXTFLOW_LOKI_URL": "http://localhost:3100",
+        "NXTFLOW_JOB": "nxtflow",
+        "NXTFLOW_TLS_VERIFY": "true"
+      }
+    }
+  }
+}

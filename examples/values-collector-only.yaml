@@ -1,0 +1,33 @@
+# Remote collector-only edge deployment shipping enriched flows to a central Loki
+tags:
+  standalone: false
+
+collector:
+  site: "branch-west"
+  job: "nxtflow"
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+
+externalLoki:
+  url: "https://loki.example.com"
+
+enricher:
+  classification:
+    localCidrs:
+      - "10.20.0.0/16"
+  shipper:
+    mode: "direct"
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+grafana:
+  dashboardConfigMap:
+    enabled: false
+
+mcp:
+  enabled: false

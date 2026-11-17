@@ -1,0 +1,19 @@
+FROM python:3.12-alpine
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir . \
+    && (addgroup -g 65533 -S nogroup 2>/dev/null || true) \
+    && (adduser -u 100 -G nogroup -S -D -H flow 2>/dev/null || true)
+
+USER 100:65533
+
+EXPOSE 8081 9090
+
+ENTRYPOINT ["nxtflow-enricher"]

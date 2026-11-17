@@ -1,0 +1,71 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nxtflow.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.monitoring.prometheusRule.namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: nxtflow.rules
+      rules:
+        - alert: NxtflowCollectorDown
+          expr: max(up{service=~".*{{ include "nxtflow.fullname" . }}-metrics.*"}) == 0 or absent(up{service=~".*{{ include "nxtflow.fullname" . }}-metrics.*"})
+          for: 5m
+          labels:
+            severity: critical
+            {{- if .Values.monitoring.prometheusRule.clusterLabel }}
+            cluster: {{ .Values.monitoring.prometheusRule.clusterLabel | quote }}
+            {{- end }}
+          annotations:
+            summary: "nxtflow collector metrics target is down"
+            description: "No healthy nxtflow collector metrics endpoint detected for 5m."
+        - alert: NxtflowNoData
+          expr: sum(rate(nxtflow_flows_received_total[15m])) == 0
+          for: 15m
+          labels:
+            severity: warning
+            {{- if .Values.monitoring.prometheusRule.clusterLabel }}
+            cluster: {{ .Values.monitoring.prometheusRule.clusterLabel | quote }}
+            {{- end }}
+          annotations:
+            summary: "nxtflow received zero flow records for 15m"
+            description: "Verify NetFlow/IPFIX/sFlow exporter reachability and UDP port {{ .Values.collector.service.netflowPort }}/{{ .Values.collector.service.sflowPort }}."
+        - alert: NxtflowSiteNoData
+          expr: sum by (site) (rate(nxtflow_flows_received_total[15m])) == 0
+          for: 15m
+          labels:
+            severity: warning
+            {{- if .Values.monitoring.prometheusRule.clusterLabel }}
+            cluster: {{ .Values.monitoring.prometheusRule.clusterLabel | quote }}
+            {{- end }}
+          annotations:
+            summary: "nxtflow site {{ "{{ $labels.site }}" }} stopped receiving flows"
+            description: "Site {{ "{{ $labels.site }}" }} recorded zero enriched flow records for 15m."
+        - alert: NxtflowLokiPushErrors
+          expr: sum(rate(nxtflow_loki_push_errors_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            {{- if .Values.monitoring.prometheusRule.clusterLabel }}
+            cluster: {{ .Values.monitoring.prometheusRule.clusterLabel | quote }}
+            {{- end }}
+          annotations:
+            summary: "nxtflow enricher failing to push batches to Loki"
+            description: "nxtflow_loki_push_errors_total is increasing over the last 5m."
+        - alert: NxtflowDroppedFlows
+          expr: sum(rate(nxtflow_dropped_flows_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            {{- if .Values.monitoring.prometheusRule.clusterLabel }}
+            cluster: {{ .Values.monitoring.prometheusRule.clusterLabel | quote }}
+            {{- end }}
+          annotations:
+            summary: "nxtflow enricher is dropping flow records"
+            description: "nxtflow_dropped_flows_total is increasing due to parse errors or ring buffer saturation."
+{{- end }}

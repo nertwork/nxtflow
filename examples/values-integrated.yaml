@@ -1,0 +1,51 @@
+# Integrated deployment connecting to an existing Loki, kube-prometheus-stack, and Grafana
+tags:
+  standalone: false
+
+collector:
+  site: "edge-1"
+  job: "nxtflow"
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+
+externalLoki:
+  url: "https://loki.example.com"
+  tenantId: ""
+  auth:
+    existingSecret: "loki-push-credentials"
+
+enricher:
+  classification:
+    localCidrs:
+      - "10.0.0.0/8"
+      - "192.168.0.0/16"
+    wanIps:
+      - "203.0.113.10"
+  shipper:
+    mode: "direct"
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+  prometheusRule:
+    enabled: true
+    additionalLabels:
+      release: kube-prometheus-stack
+
+grafana:
+  dashboardConfigMap:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    folderAnnotation: "Networking"
+  datasourceUids:
+    loki: "loki"
+    prometheus: "prometheus"
+  sankey:
+    engine: "echarts"
+
+mcp:
+  enabled: true

@@ -1,0 +1,67 @@
+{{- if eq .Values.enricher.shipper.mode "alloy" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-alloy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+data:
+  config.alloy: |
+    local.file_match "nxtflow_flows" {
+      path_targets = [{
+        __path__ = {{ .Values.enricher.shipper.file.path | quote }},
+        job      = {{ .Values.collector.job | quote }},
+        site     = {{ .Values.collector.site | quote }},
+      }]
+    }
+
+    loki.source.file "nxtflow" {
+      targets    = local.file_match.nxtflow_flows.targets
+      forward_to = [loki.process.nxtflow_labels.receiver]
+    }
+
+    loki.process "nxtflow_labels" {
+      stage.json {
+        expressions = {
+          dir = "dir",
+        }
+      }
+      stage.labels {
+        values = {
+          dir = "",
+        }
+      }
+      forward_to = [loki.write.default.receiver]
+    }
+
+    loki.write "default" {
+      endpoint {
+        url = {{ printf "%s/loki/api/v1/push" (include "nxtflow.lokiUrl" .) | quote }}
+        {{- if .Values.externalLoki.tenantId }}
+        tenant_id = {{ .Values.externalLoki.tenantId | quote }}
+        {{- end }}
+        {{- $authType := .Values.externalLoki.auth.type | default "" }}
+        {{- if or (eq $authType "basic") (and (empty $authType) (or .Values.externalLoki.auth.username .Values.externalLoki.auth.password)) }}
+        basic_auth {
+          username = sys.env("NXTFLOW_LOKI_USERNAME")
+          password = sys.env("NXTFLOW_LOKI_PASSWORD")
+        }
+        {{- else if or (eq $authType "bearer") (and (empty $authType) .Values.externalLoki.auth.bearerToken) }}
+        bearer_token = sys.env("NXTFLOW_LOKI_TOKEN")
+        {{- else if .Values.externalLoki.auth.existingSecret }}
+        // Set externalLoki.auth.type ("basic" or "bearer") to enable basic_auth or bearer_token with existingSecret.
+        {{- end }}
+        {{- if or .Values.externalLoki.tls.insecureSkipVerify .Values.externalLoki.tls.caFile }}
+        tls_config {
+          {{- if .Values.externalLoki.tls.insecureSkipVerify }}
+          insecure_skip_verify = true
+          {{- end }}
+          {{- if .Values.externalLoki.tls.caFile }}
+          ca_file = {{ .Values.externalLoki.tls.caFile | quote }}
+          {{- end }}
+        }
+        {{- end }}
+      }
+    }
+{{- end }}

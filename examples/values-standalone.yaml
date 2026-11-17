@@ -1,0 +1,26 @@
+# Standalone all-in-one deployment (bundled Loki, Prometheus, Grafana, Collector, Enricher, and MCP)
+tags:
+  standalone: true
+
+collector:
+  site: "lab"
+  job: "nxtflow"
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+
+enricher:
+  classification:
+    localCidrs:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+    wanIps:
+      - "198.51.100.1"
+  resolution:
+    staticHosts:
+      "192.168.1.1": "core-router"
+      "192.168.1.10": "nas-storage"
+
+mcp:
+  enabled: true

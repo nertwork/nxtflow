@@ -1,0 +1,295 @@
+{{- include "nxtflow.validateConfig" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: 1
+  strategy:
+    type: {{ .Values.collector.strategy.type }}
+  selector:
+    matchLabels:
+      {{- include "nxtflow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      labels:
+        {{- include "nxtflow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: collector
+        {{- with .Values.collector.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/enricher-config: {{ include (print $.Template.BasePath "/configmap-enricher.yaml") . | sha256sum }}
+        {{- if .Values.collector.goflow2.mapping }}
+        checksum/goflow2-mapping: {{ include (print $.Template.BasePath "/configmap-goflow2-mapping.yaml") . | sha256sum }}
+        {{- end }}
+        {{- if eq .Values.enricher.shipper.mode "alloy" }}
+        checksum/alloy-config: {{ include (print $.Template.BasePath "/configmap-alloy.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.collector.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        fsGroup: 65533
+      {{- with .Values.collector.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.collector.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: goflow2
+          image: "{{ .Values.collector.goflow2.image.repository }}:{{ .Values.collector.goflow2.image.tag }}"
+          imagePullPolicy: {{ .Values.collector.goflow2.image.pullPolicy }}
+          args:
+            - "-listen={{ .Values.collector.goflow2.listen }}"
+            - "-format={{ .Values.collector.goflow2.format }}"
+            - "-addr=:{{ .Values.collector.metricsService.goflow2Port }}"
+            {{- if eq .Values.collector.goflow2.transport "http" }}
+            - "-transport=http"
+            - "-transport.http.destination=http://127.0.0.1:8081/ingest"
+            {{- else }}
+            - "-transport=file"
+            - "-transport.file={{ .Values.enricher.ingest.file.path }}"
+            {{- end }}
+            {{- if .Values.collector.goflow2.mapping }}
+            - "-mapping=/etc/goflow2/mapping.yaml"
+            {{- end }}
+            {{- range .Values.collector.goflow2.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          ports:
+            - name: netflow
+              containerPort: {{ .Values.collector.service.netflowPort }}
+              protocol: UDP
+              {{- if .Values.collector.service.hostPort }}
+              hostPort: {{ .Values.collector.service.netflowPort }}
+              {{- end }}
+            - name: sflow
+              containerPort: {{ .Values.collector.service.sflowPort }}
+              protocol: UDP
+              {{- if .Values.collector.service.hostPort }}
+              hostPort: {{ .Values.collector.service.sflowPort }}
+              {{- end }}
+            - name: goflow2-metrics
+              containerPort: {{ .Values.collector.metricsService.goflow2Port }}
+              protocol: TCP
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 65533
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: goflow2-buffer
+              mountPath: /var/log/goflow2
+            {{- if .Values.collector.goflow2.mapping }}
+            - name: goflow2-mapping
+              mountPath: /etc/goflow2
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.collector.goflow2.resources | nindent 12 }}
+
+        - name: enricher
+          image: "{{ .Values.enricher.image.repository }}:{{ .Values.enricher.image.tag }}"
+          imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
+          args:
+            - "--config"
+            - "/etc/nxtflow/enricher.yaml"
+            - "--log-level"
+            - {{ .Values.enricher.logLevel | quote }}
+          env:
+            - name: NXTFLOW_CONFIG_FILE
+              value: "/etc/nxtflow/enricher.yaml"
+            {{- if or (include "nxtflow.hasInlineLokiAuth" .) .Values.externalLoki.auth.existingSecret }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.username }}
+            - name: NXTFLOW_LOKI_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: username
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.password }}
+            - name: NXTFLOW_LOKI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: password
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.bearerToken }}
+            - name: NXTFLOW_LOKI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: bearerToken
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.enricher.netbox.enabled .Values.enricher.netbox.existingSecret }}
+            - name: NXTFLOW_NETBOX_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.enricher.netbox.existingSecret }}
+                  key: token
+            {{- end }}
+          ports:
+            {{- if .Values.enricher.ingest.http.enabled }}
+            - name: http-ingest
+              containerPort: 8081
+              protocol: TCP
+            {{- end }}
+            - name: metrics
+              containerPort: {{ .Values.collector.metricsService.enricherPort }}
+              protocol: TCP
+          {{- if .Values.enricher.ingest.http.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-ingest
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http-ingest
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          {{- else }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 65533
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: enricher-config
+              mountPath: /etc/nxtflow
+              readOnly: true
+            - name: goflow2-buffer
+              mountPath: /var/log/goflow2
+            - name: flow-output
+              mountPath: /var/log/nxtflow
+            {{- if .Values.externalLoki.tls.existingCaConfigMap }}
+            - name: external-loki-ca
+              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.collector.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.enricher.resources | nindent 12 }}
+
+        {{- if eq .Values.enricher.shipper.mode "alloy" }}
+        - name: alloy
+          image: "{{ .Values.enricher.shipper.alloy.image.repository }}:{{ .Values.enricher.shipper.alloy.image.tag }}"
+          imagePullPolicy: {{ .Values.enricher.shipper.alloy.image.pullPolicy }}
+          args:
+            - "run"
+            - "--storage.path=/tmp/alloy"
+            - "/etc/alloy/config.alloy"
+          {{- if or (include "nxtflow.hasInlineLokiAuth" .) .Values.externalLoki.auth.existingSecret }}
+          env:
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.username }}
+            - name: NXTFLOW_LOKI_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: username
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.password }}
+            - name: NXTFLOW_LOKI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: password
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.bearerToken }}
+            - name: NXTFLOW_LOKI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: bearerToken
+                  optional: true
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 65533
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: alloy-config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: flow-output
+              mountPath: /var/log/nxtflow
+              readOnly: true
+            {{- if .Values.externalLoki.tls.existingCaConfigMap }}
+            - name: external-loki-ca
+              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.collector.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.enricher.shipper.alloy.resources | nindent 12 }}
+        {{- end }}
+
+      volumes:
+        - name: enricher-config
+          configMap:
+            name: {{ include "nxtflow.fullname" . }}-enricher
+        - name: goflow2-buffer
+          emptyDir:
+            sizeLimit: 500Mi
+        - name: flow-output
+          emptyDir:
+            sizeLimit: 500Mi
+        {{- if .Values.collector.goflow2.mapping }}
+        - name: goflow2-mapping
+          configMap:
+            name: {{ include "nxtflow.fullname" . }}-goflow2-mapping
+        {{- end }}
+        {{- if eq .Values.enricher.shipper.mode "alloy" }}
+        - name: alloy-config
+          configMap:
+            name: {{ include "nxtflow.fullname" . }}-alloy
+        {{- end }}
+        {{- if .Values.externalLoki.tls.existingCaConfigMap }}
+        - name: external-loki-ca
+          configMap:
+            name: {{ .Values.externalLoki.tls.existingCaConfigMap }}
+        {{- end }}
+        {{- with .Values.collector.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}

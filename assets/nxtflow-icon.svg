@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b101b"/>
+      <stop offset="50%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1a2236"/>
+    </linearGradient>
+    <radialGradient id="ambientGlow" cx="50%" cy="50%" r="45%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.32"/>
+      <stop offset="55%" stop-color="#6366f1" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#0b101b" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="flowTop" gradientUnits="userSpaceOnUse" x1="76" y1="0" x2="436" y2="0">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#0a84ff"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="flowMid" gradientUnits="userSpaceOnUse" x1="76" y1="0" x2="436" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="flowBot" gradientUnits="userSpaceOnUse" x1="76" y1="0" x2="436" y2="0">
+      <stop offset="0%" stop-color="#0a84ff"/>
+      <stop offset="50%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a5b4fc"/>
+    </linearGradient>
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="50%" stop-color="#0a84ff"/>
+      <stop offset="100%" stop-color="#4f46e5"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" ry="112" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="6"/>
+  <circle cx="256" cy="256" r="196" fill="url(#ambientGlow)"/>
+  <circle cx="256" cy="256" r="168" fill="none" stroke="#1e293b" stroke-width="2" stroke-dasharray="6 10"/>
+
+  <path d="M 76 142 C 158 142, 178 232, 256 256 C 334 280, 354 370, 436 370" fill="none" stroke="url(#flowTop)" stroke-width="22" stroke-linecap="round" stroke-opacity="0.88"/>
+  <path d="M 76 256 L 436 256" fill="none" stroke="url(#flowMid)" stroke-width="26" stroke-linecap="round" stroke-opacity="0.95"/>
+  <path d="M 76 370 C 158 370, 178 280, 256 256 C 334 232, 354 142, 436 142" fill="none" stroke="url(#flowBot)" stroke-width="22" stroke-linecap="round" stroke-opacity="0.88"/>
+
+  <circle cx="80" cy="142" r="14" fill="#38bdf8" stroke="#0b101b" stroke-width="4"/>
+  <circle cx="80" cy="256" r="16" fill="#22d3ee" stroke="#0b101b" stroke-width="4"/>
+  <circle cx="80" cy="370" r="14" fill="#0a84ff" stroke="#0b101b" stroke-width="4"/>
+
+  <circle cx="432" cy="142" r="14" fill="#a5b4fc" stroke="#0b101b" stroke-width="4"/>
+  <circle cx="432" cy="256" r="16" fill="#6366f1" stroke="#0b101b" stroke-width="4"/>
+  <circle cx="432" cy="370" r="14" fill="#818cf8" stroke="#0b101b" stroke-width="4"/>
+
+  <circle cx="256" cy="256" r="64" fill="#0f172a" stroke="#7dd3fc" stroke-opacity="0.5" stroke-width="4"/>
+  <circle cx="256" cy="256" r="46" fill="url(#nodeGrad)"/>
+  <circle cx="256" cy="256" r="22" fill="#0b101b" fill-opacity="0.35"/>
+
+  <circle cx="164" cy="182" r="7" fill="#ffffff" fill-opacity="0.92"/>
+  <circle cx="152" cy="256" r="8" fill="#ffffff" fill-opacity="0.96"/>
+  <circle cx="348" cy="182" r="7" fill="#ffffff" fill-opacity="0.92"/>
+  <circle cx="360" cy="256" r="8" fill="#ffffff" fill-opacity="0.96"/>
+  <circle cx="256" cy="256" r="11" fill="#ffffff"/>
+</svg>

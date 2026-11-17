@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  zero-pii-audit:
+    name: Zero-PII & Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Zero-PII & Secret Sanitization Audit
+        run: python3 scripts/zero_pii_audit.py
+
+  python-lint-and-tests:
+    name: Python Lint & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Package & Dev Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[mcp,dev]" jsonschema
+
+      - name: Ruff Lint Check
+        run: ruff check src tests scripts .github/scripts
+
+      - name: Run Python Unit Tests
+        run: pytest -v tests/test_enricher.py tests/test_cli.py tests/test_mcp.py
+
+  helm-lint-and-template:
+    name: Helm Lint, Schema & Template
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[mcp,dev]" jsonschema
+
+      - name: Setup Helm v4
+        uses: azure/setup-helm@v4
+        with:
+          version: "v4.3.1"
+
+      - name: Add Helm Repositories & Build Chart Dependencies
+        run: |
+          helm repo add grafana-community https://grafana-community.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm dependency build charts/nxtflow
+
+      - name: Helm Lint (Default & Example Modes)
+        run: |
+          helm lint charts/nxtflow
+          helm lint charts/nxtflow -f examples/values-standalone.yaml
+          helm lint charts/nxtflow -f examples/values-integrated.yaml
+          helm lint charts/nxtflow -f examples/values-collector-only.yaml
+
+      - name: Run Helm Schema, Asset & Template Pytest Suite
+        run: pytest -v tests/test_helm.py
+
+      - name: Run Helm chart-testing (ct lint)
+        uses: helm/chart-testing-action@v2
+        with:
+          command: lint
+          config: ct.yaml
+
+  docker-and-kind:
+    name: Docker Build & Kind Helm Install
+    runs-on: ubuntu-latest
+    needs:
+      - zero-pii-audit
+      - python-lint-and-tests
+      - helm-lint-and-template
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Enricher Container Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.enricher
+          push: false
+          load: true
+          tags: ghcr.io/nertwork/nxtflow-enricher:ci-test
+
+      - name: Build MCP Container Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.mcp
+          push: false
+          load: true
+          tags: ghcr.io/nertwork/nxtflow-mcp:ci-test
+
+      - name: Setup Helm v4
+        uses: azure/setup-helm@v4
+        with:
+          version: "v4.3.1"
+
+      - name: Build Helm Dependencies
+        run: |
+          helm repo add grafana-community https://grafana-community.github.io/helm-charts
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm dependency build charts/nxtflow
+
+      - name: Create Kind Cluster
+        uses: helm/kind-action@v1
+
+      - name: Load Images & Smoke-Test Helm Install in Kind
+        run: |
+          kind load docker-image ghcr.io/nertwork/nxtflow-enricher:ci-test
+          kind load docker-image ghcr.io/nertwork/nxtflow-mcp:ci-test
+          kubectl create namespace nxtflow
+          helm install nxtflow charts/nxtflow -n nxtflow             --set tags.standalone=false             --set externalLoki.url=http://localhost:3100             --set enricher.image.tag=ci-test             --set enricher.image.pullPolicy=IfNotPresent             --set mcp.image.tag=ci-test             --set mcp.image.pullPolicy=IfNotPresent             --set collector.service.type=ClusterIP             --wait --timeout 180s
+          kubectl get pods -n nxtflow
+          helm test nxtflow -n nxtflow

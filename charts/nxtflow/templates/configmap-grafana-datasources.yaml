@@ -1,0 +1,76 @@
+{{- if include "nxtflow.grafanaBundled" . }}
+{{- $lokiBundled := include "nxtflow.lokiBundled" . }}
+{{- $promBundled := include "nxtflow.prometheusBundled" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-grafana-datasources
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    grafana_datasource: "1"
+data:
+  nxtflow-datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Loki
+        type: loki
+        uid: loki
+        access: proxy
+        url: {{ include "nxtflow.lokiUrl" . }}
+        isDefault: false
+        editable: true
+        {{- if and (not $lokiBundled) (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.username }}
+        basicAuth: true
+        basicAuthUser: {{ .Values.externalLoki.auth.username | quote }}
+        {{- end }}
+        jsonData:
+          maxLines: 1000
+          {{- if not $lokiBundled }}
+          {{- if .Values.externalLoki.tls.insecureSkipVerify }}
+          tlsSkipVerify: true
+          {{- end }}
+          {{- if .Values.externalLoki.tenantId }}
+          httpHeaderName1: X-Scope-OrgID
+          {{- if and (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.bearerToken }}
+          httpHeaderName2: Authorization
+          {{- end }}
+          {{- else if and (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.bearerToken }}
+          httpHeaderName1: Authorization
+          {{- end }}
+          {{- end }}
+        {{- if and (not $lokiBundled) (or .Values.externalLoki.tenantId (and (empty .Values.externalLoki.auth.existingSecret) (or .Values.externalLoki.auth.password .Values.externalLoki.auth.bearerToken))) }}
+        secureJsonData:
+          {{- if .Values.externalLoki.tenantId }}
+          httpHeaderValue1: {{ .Values.externalLoki.tenantId | quote }}
+          {{- if and (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.bearerToken }}
+          httpHeaderValue2: {{ printf "Bearer %s" .Values.externalLoki.auth.bearerToken | quote }}
+          {{- end }}
+          {{- else if and (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.bearerToken }}
+          httpHeaderValue1: {{ printf "Bearer %s" .Values.externalLoki.auth.bearerToken | quote }}
+          {{- end }}
+          {{- if and (empty .Values.externalLoki.auth.existingSecret) .Values.externalLoki.auth.password }}
+          basicAuthPassword: {{ .Values.externalLoki.auth.password | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if and (not $lokiBundled) .Values.externalLoki.auth.existingSecret }}
+        # externalLoki.auth.existingSecret is mounted on collector and mcp; configure Grafana secret env vars if Loki requires auth.
+        {{- end }}
+      {{- if $promBundled }}
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://{{ .Release.Name }}-prometheus-server:80
+        isDefault: true
+        editable: true
+      {{- else if .Values.grafana.externalPrometheusUrl }}
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: {{ .Values.grafana.externalPrometheusUrl | trimSuffix "/" | quote }}
+        isDefault: true
+        editable: true
+      {{- end }}
+{{- end }}

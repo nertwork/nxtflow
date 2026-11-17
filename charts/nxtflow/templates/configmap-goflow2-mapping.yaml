@@ -1,0 +1,12 @@
+{{- if .Values.collector.goflow2.mapping }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-goflow2-mapping
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+data:
+  mapping.yaml: |
+{{ .Values.collector.goflow2.mapping | indent 4 }}
+{{- end }}

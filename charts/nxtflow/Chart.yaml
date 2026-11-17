@@ -1,0 +1,43 @@
+apiVersion: v2
+name: nxtflow
+description: AI-ready multi-site NetFlow v5/v9, IPFIX, and sFlow collector, enricher, Loki pipeline, Grafana dashboard, and MCP server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/nertwork/nxtflow
+sources:
+  - https://github.com/nertwork/nxtflow
+icon: https://raw.githubusercontent.com/nertwork/nxtflow/main/assets/nxtflow-icon.png
+keywords:
+  - netflow
+  - ipfix
+  - sflow
+  - goflow2
+  - loki
+  - grafana
+  - prometheus
+  - mcp
+  - network-monitoring
+maintainers:
+  - name: James Gomez
+    email: james@nertwork.com
+    url: https://github.com/nertwork
+dependencies:
+  - name: loki
+    version: "21.3.1"
+    repository: "https://grafana-community.github.io/helm-charts"
+    condition: bundled.loki.enabled
+    tags:
+      - standalone
+  - name: prometheus
+    version: "29.47.2"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: bundled.prometheus.enabled
+    tags:
+      - standalone
+  - name: grafana
+    version: "14.5.0"
+    repository: "https://grafana-community.github.io/helm-charts"
+    condition: bundled.grafana.enabled
+    tags:
+      - standalone

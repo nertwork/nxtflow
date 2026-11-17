@@ -1,0 +1,292 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nxtflow Helm Chart Values Schema",
+  "type": "object",
+  "properties": {
+    "tags": {
+      "type": "object",
+      "properties": {
+        "standalone": {
+          "type": "boolean"
+        }
+      }
+    },
+    "collector": {
+      "type": "object",
+      "properties": {
+        "site": {
+          "type": "string",
+          "minLength": 1
+        },
+        "job": {
+          "type": "string",
+          "minLength": 1
+        },
+        "includeSamplerLabel": {
+          "type": "boolean"
+        },
+        "goflow2": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string",
+              "enum": [
+                "file",
+                "http"
+              ]
+            },
+            "listen": {
+              "type": "string",
+              "minLength": 1
+            },
+            "format": {
+              "type": "string",
+              "enum": [
+                "json",
+                "text",
+                "bin"
+              ]
+            }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "LoadBalancer",
+                "NodePort",
+                "ClusterIP"
+              ]
+            },
+            "externalTrafficPolicy": {
+              "type": "string",
+              "enum": [
+                "Local",
+                "Cluster"
+              ]
+            },
+            "netflowPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "sflowPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "hostPort": {
+              "type": "boolean"
+            }
+          }
+        },
+        "metricsService": {
+          "type": "object",
+          "properties": {
+            "goflow2Port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "enricherPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          }
+        },
+        "extraVolumes": {
+          "type": "array"
+        },
+        "extraVolumeMounts": {
+          "type": "array"
+        }
+      }
+    },
+    "enricher": {
+      "type": "object",
+      "properties": {
+        "sampling": {
+          "type": "object",
+          "properties": {
+            "respectSamplingRate": {
+              "type": "boolean"
+            },
+            "defaultSamplingRate": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "shipper": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "direct",
+                "alloy",
+                "file"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "streamable-http",
+            "sse"
+          ]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "statelessHttp": {
+          "type": "boolean"
+        },
+        "extraVolumes": {
+          "type": "array"
+        },
+        "extraVolumeMounts": {
+          "type": "array"
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "grafana": {
+      "type": "object",
+      "properties": {
+        "sankey": {
+          "type": "object",
+          "properties": {
+            "engine": {
+              "type": "string",
+              "enum": [
+                "echarts",
+                "netsage"
+              ]
+            }
+          }
+        },
+        "externalPrometheusUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "externalLoki": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "insecureSkipVerify": {
+              "type": "boolean"
+            },
+            "caFile": {
+              "type": "string"
+            },
+            "existingCaConfigMap": {
+              "type": "string"
+            }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "existingSecret": {
+              "type": "string"
+            },
+            "username": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string"
+            },
+            "bearerToken": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "",
+                "basic",
+                "bearer"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "bundled": {
+      "type": "object",
+      "properties": {
+        "loki": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "prometheus": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "grafana": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  }
+}

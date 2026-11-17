@@ -1,0 +1,36 @@
+! Cisco IOS-XE Flexible NetFlow v9 / IPFIX Configuration for nxtflow
+! Replace 192.168.1.50 with your nxtflow collector IP (or 203.0.113.50 for remote).
+
+flow record NXTFLOW-RECORD
+ match ipv4 protocol
+ match ipv4 source address
+ match ipv4 destination address
+ match transport source-port
+ match transport destination-port
+ collect counter bytes long
+ collect counter packets long
+ collect timestamp sys-uptime first
+ collect timestamp sys-uptime last
+
+flow exporter NXTFLOW-EXPORTER
+ destination 192.168.1.50
+ source Loopback0
+ transport udp 2055
+ export-protocol netflow-v9
+ ! Use `export-protocol ipfix` for IPFIX (RFC 7011)
+ template data timeout 60
+
+flow monitor NXTFLOW-MONITOR
+ exporter NXTFLOW-EXPORTER
+ record NXTFLOW-RECORD
+ cache timeout active 60
+ cache timeout inactive 15
+
+! Attach to routed interfaces (e.g. GigabitEthernet0/0/0):
+interface GigabitEthernet0/0/0
+ ip flow monitor NXTFLOW-MONITOR input
+ ip flow monitor NXTFLOW-MONITOR output
+
+! Verification:
+! show flow exporter NXTFLOW-EXPORTER statistics
+! show flow monitor NXTFLOW-MONITOR cache format table

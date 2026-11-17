@@ -1,0 +1,61 @@
+{{- if or (include "nxtflow.grafanaBundled" .) .Values.grafana.dashboardConfigMap.enabled }}
+{{- $grafanaBundled := include "nxtflow.grafanaBundled" . -}}
+{{- $ns := default .Release.Namespace .Values.grafana.dashboardConfigMap.namespace -}}
+{{- $lokiUid := default (ternary "loki" "" (not (empty $grafanaBundled))) .Values.grafana.datasourceUids.loki -}}
+{{- $promUid := default (ternary "prometheus" "" (not (empty $grafanaBundled))) .Values.grafana.datasourceUids.prometheus -}}
+{{- $rawDash := .Files.Get "files/dashboards/nxtflow-overview.json" -}}
+{{- $jobEscaped := printf "job=\\\"%s\\\"" .Values.collector.job -}}
+{{- $rawDash = replace "job=\\\"nxtflow\\\"" $jobEscaped $rawDash -}}
+{{- if not (empty $lokiUid) -}}
+{{- $rawDash = replace "${DS_LOKI}" $lokiUid $rawDash -}}
+{{- end -}}
+{{- if not (empty $promUid) -}}
+{{- $rawDash = replace "${DS_PROMETHEUS}" $promUid $rawDash -}}
+{{- end -}}
+{{- $srcFilter := list -}}
+{{- $dstFilter := list -}}
+{{- range .Values.enricher.classification.excludedHosts -}}
+{{- $srcFilter = append $srcFilter (printf "src_host != `%s`" .) -}}
+{{- $dstFilter = append $dstFilter (printf "dst_host != `%s`" .) -}}
+{{- end -}}
+{{- $srcFilter = append $srcFilter "src_host != ``" -}}
+{{- $dstFilter = append $dstFilter "dst_host != ``" -}}
+{{- $srcExpr := join " | " $srcFilter -}}
+{{- $dstExpr := join " | " $dstFilter -}}
+{{- $rawDash = replace "src_host != `multicast` | src_host != `link-local` | src_host != ``" $srcExpr $rawDash -}}
+{{- $rawDash = replace "dst_host != `multicast` | dst_host != `link-local` | dst_host != ``" $dstExpr $rawDash -}}
+{{- if eq .Values.grafana.sankey.engine "netsage" -}}
+{{- $dashObj := fromJson $rawDash -}}
+{{- $newPanels := list -}}
+{{- $dsLokiRef := ternary $lokiUid "${DS_LOKI}" (not (empty $lokiUid)) -}}
+{{- $sankeyTarget := printf "topk(25, sum by (src_host, dst_host) (sum_over_time({job=\"%s\", site=~\"$site\", dir=~\"$dir\"} |~ `$search` | json flow_bytes=\"bytes\", src_host=\"src_host\", dst_host=\"dst_host\" | %s | %s | unwrap flow_bytes [$__range])))" .Values.collector.job $srcExpr $dstExpr -}}
+{{- range $dashObj.panels -}}
+{{- if eq (int .id) 14 -}}
+{{- $netsage := dict "id" 14 "title" "Traffic Flow" "type" "netsage-sankey-panel" "gridPos" .gridPos "datasource" (dict "type" "loki" "uid" $dsLokiRef) "targets" (list (dict "expr" $sankeyTarget "refId" "A" "format" "table" "queryType" "instant")) "fieldConfig" (dict "defaults" (dict "unit" "bytes")) "transformations" .transformations "options" (dict "color" "#4477AA" "nodeColor" "#228833" "monochrome" false "nodePadding" 12 "nodeWidth" 18 "labelSize" 12 "iteration" 32 "valueField" "Value") -}}
+{{- $newPanels = append $newPanels $netsage -}}
+{{- else -}}
+{{- $newPanels = append $newPanels . -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $dashObj "panels" $newPanels -}}
+{{- $rawDash = toPrettyJson $dashObj -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-dashboard
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    {{ .Values.grafana.dashboardConfigMap.label }}: {{ .Values.grafana.dashboardConfigMap.labelValue | quote }}
+    {{- with .Values.grafana.dashboardConfigMap.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- if .Values.grafana.dashboardConfigMap.folderAnnotation }}
+  annotations:
+    grafana_folder: {{ .Values.grafana.dashboardConfigMap.folderAnnotation | quote }}
+  {{- end }}
+data:
+  nxtflow-overview.json: |
+{{ $rawDash | indent 4 }}
+{{- end }}

@@ -1,0 +1,80 @@
+{{- include "nxtflow.validateConfig" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-enricher
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+data:
+  enricher.yaml: |
+    collector:
+      site: {{ .Values.collector.site | quote }}
+      job: {{ .Values.collector.job | quote }}
+      includeSamplerLabel: {{ .Values.collector.includeSamplerLabel }}
+    ingest:
+      http:
+        enabled: {{ .Values.enricher.ingest.http.enabled }}
+        listenAddr: {{ .Values.enricher.ingest.http.listenAddr | quote }}
+        maxBodyBytes: {{ .Values.enricher.ingest.http.maxBodyBytes | int64 }}
+      file:
+        enabled: {{ .Values.enricher.ingest.file.enabled }}
+        path: {{ .Values.enricher.ingest.file.path | quote }}
+        pollIntervalSeconds: {{ .Values.enricher.ingest.file.pollIntervalSeconds }}
+        positionFile: {{ .Values.enricher.ingest.file.positionFile | quote }}
+        truncateAtBytes: {{ .Values.enricher.ingest.file.truncateAtBytes | int64 }}
+      stdin:
+        enabled: {{ .Values.enricher.ingest.stdin.enabled }}
+    metrics:
+      listenAddr: {{ .Values.enricher.metrics.listenAddr | quote }}
+    sampling:
+      respectSamplingRate: {{ .Values.enricher.sampling.respectSamplingRate }}
+      defaultSamplingRate: {{ .Values.enricher.sampling.defaultSamplingRate | int64 }}
+    classification:
+      localCidrs:
+        {{- toYaml .Values.enricher.classification.localCidrs | nindent 8 }}
+      wanIps:
+        {{- toYaml .Values.enricher.classification.wanIps | nindent 8 }}
+      internalCidrs:
+        {{- toYaml .Values.enricher.classification.internalCidrs | nindent 8 }}
+      excludedHosts:
+        {{- toYaml .Values.enricher.classification.excludedHosts | nindent 8 }}
+    resolution:
+      staticHosts:
+        {{- toYaml .Values.enricher.resolution.staticHosts | nindent 8 }}
+      services:
+        {{- toYaml .Values.enricher.resolution.services | nindent 8 }}
+      extraCidrs:
+        {{- toYaml .Values.enricher.resolution.extraCidrs | nindent 8 }}
+      useDefaultCidrs: {{ .Values.enricher.resolution.useDefaultCidrs }}
+      rdns:
+        enabled: {{ .Values.enricher.resolution.rdns.enabled }}
+        private: {{ .Values.enricher.resolution.rdns.private }}
+        timeoutSeconds: {{ .Values.enricher.resolution.rdns.timeoutSeconds }}
+        maxEntries: {{ .Values.enricher.resolution.rdns.maxEntries | int64 }}
+        ttlSeconds: {{ .Values.enricher.resolution.rdns.ttlSeconds }}
+        negativeTtlSeconds: {{ .Values.enricher.resolution.rdns.negativeTtlSeconds }}
+    netbox:
+      enabled: {{ .Values.enricher.netbox.enabled }}
+      url: {{ .Values.enricher.netbox.url | quote }}
+      tlsVerify: {{ .Values.enricher.netbox.tlsVerify }}
+      syncIntervalSeconds: {{ .Values.enricher.netbox.syncIntervalSeconds }}
+      timeoutSeconds: {{ .Values.enricher.netbox.timeoutSeconds }}
+      stripDomain: {{ .Values.enricher.netbox.stripDomain }}
+    shipper:
+      mode: {{ .Values.enricher.shipper.mode | quote }}
+      loki:
+        url: {{ include "nxtflow.lokiUrl" . | quote }}
+        tenantId: {{ .Values.externalLoki.tenantId | quote }}
+        tlsVerify: {{ not .Values.externalLoki.tls.insecureSkipVerify }}
+        caFile: {{ .Values.externalLoki.tls.caFile | quote }}
+        timeoutSeconds: {{ .Values.enricher.shipper.loki.timeoutSeconds }}
+        batchMaxEntries: {{ .Values.enricher.shipper.loki.batchMaxEntries | int64 }}
+        batchMaxWaitSeconds: {{ .Values.enricher.shipper.loki.batchMaxWaitSeconds }}
+        ringBufferMaxFlows: {{ .Values.enricher.shipper.loki.ringBufferMaxFlows | int64 }}
+        maxRetries: {{ .Values.enricher.shipper.loki.maxRetries | int64 }}
+        initialBackoffSeconds: {{ .Values.enricher.shipper.loki.initialBackoffSeconds }}
+        maxBackoffSeconds: {{ .Values.enricher.shipper.loki.maxBackoffSeconds }}
+      file:
+        path: {{ .Values.enricher.shipper.file.path | quote }}
+        truncateAtBytes: {{ .Values.enricher.shipper.file.truncateAtBytes | int64 }}

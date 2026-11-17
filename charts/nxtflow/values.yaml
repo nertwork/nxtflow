@@ -1,0 +1,311 @@
+# Default values for nxtflow.
+# Standalone mode (tags.standalone=true) deploys bundled Loki, Prometheus, and Grafana.
+# Integrated mode (tags.standalone=false) connects to your existing Loki, Prometheus, and Grafana stack.
+
+tags:
+  standalone: true
+
+nameOverride: ""
+fullnameOverride: ""
+
+commonLabels: {}
+commonAnnotations: {}
+
+collector:
+  # Site identifier attached to every Loki stream label {job, site, dir}
+  site: "default"
+  # Loki job label (must match Grafana dashboard and nxtflow CLI/MCP NXTFLOW_JOB)
+  job: "nxtflow"
+  # Include router/exporter sampler_address inside enriched JSON logs
+  includeSamplerLabel: false
+
+  strategy:
+    type: Recreate
+
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  goflow2:
+    image:
+      repository: netsampler/goflow2
+      tag: v2.2.7
+      pullPolicy: IfNotPresent
+    # Upstream netsampler/goflow2:v2.2.7 supports "file" (shared emptyDir JSONL).
+    # Set "http" only when using a GoFlow2 build that supports -transport=http.
+    transport: "file"
+    listen: "sflow://:6343,netflow://:2055"
+    format: "json"
+    extraArgs: []
+    # Optional GoFlow2 YAML mapping mounted at /etc/goflow2/mapping.yaml
+    mapping: ""
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
+
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+    annotations: {}
+    loadBalancerIP: ""
+    netflowPort: 2055
+    sflowPort: 6343
+    hostPort: false
+
+  metricsService:
+    type: ClusterIP
+    annotations: {}
+    goflow2Port: 8080
+    enricherPort: 9090
+
+enricher:
+  image:
+    repository: ghcr.io/nertwork/nxtflow-enricher
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+
+  logLevel: "INFO"
+
+  ingest:
+    http:
+      enabled: true
+      listenAddr: "0.0.0.0:8081"
+      maxBodyBytes: 10485760
+    file:
+      enabled: true
+      path: "/var/log/goflow2/raw.jsonl"
+      pollIntervalSeconds: 0.2
+      positionFile: "/tmp/nxtflow-enricher.pos"
+      truncateAtBytes: 52428800
+    stdin:
+      enabled: false
+
+  metrics:
+    listenAddr: "0.0.0.0:9090"
+
+  sampling:
+    respectSamplingRate: true
+    defaultSamplingRate: 1
+
+  classification:
+    localCidrs:
+      - "10.0.0.0/8"
+      - "172.16.0.0/12"
+      - "192.168.0.0/16"
+      - "fc00::/7"
+    wanIps: []
+    internalCidrs: []
+    excludedHosts:
+      - "multicast"
+      - "link-local"
+
+  resolution:
+    staticHosts: {}
+    services: {}
+    extraCidrs: []
+    useDefaultCidrs: true
+    rdns:
+      enabled: true
+      private: false
+      timeoutSeconds: 1.5
+      maxEntries: 10000
+      ttlSeconds: 3600
+      negativeTtlSeconds: 300
+
+  netbox:
+    enabled: false
+    url: ""
+    existingSecret: ""
+    tlsVerify: true
+    syncIntervalSeconds: 300
+    timeoutSeconds: 10
+    stripDomain: false
+
+  shipper:
+    # Supported modes: "direct" (HTTP gzip push to Loki), "alloy" (file + Alloy sidecar), "file"
+    mode: "direct"
+    loki:
+      batchMaxEntries: 500
+      batchMaxWaitSeconds: 1.0
+      ringBufferMaxFlows: 50000
+      maxRetries: 5
+      initialBackoffSeconds: 0.5
+      maxBackoffSeconds: 15.0
+      timeoutSeconds: 10.0
+    file:
+      path: "/var/log/nxtflow/flows.jsonl"
+      truncateAtBytes: 52428800
+    alloy:
+      image:
+        repository: grafana/alloy
+        tag: v1.22.0
+        pullPolicy: IfNotPresent
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          memory: 192Mi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 384Mi
+
+mcp:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/nertwork/nxtflow-mcp
+    tag: v0.1.0
+    pullPolicy: IfNotPresent
+  transport: "streamable-http"
+  port: 8000
+  statelessHttp: true
+  service:
+    type: ClusterIP
+    port: 8000
+    annotations: {}
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts: []
+    tls: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: "30s"
+    scrapeTimeout: "10s"
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    clusterLabel: ""
+    additionalLabels: {}
+
+# External Loki target (used when tags.standalone=false or bundled.loki.enabled=false)
+externalLoki:
+  url: ""
+  tenantId: ""
+  tls:
+    insecureSkipVerify: false
+    caFile: ""
+    existingCaConfigMap: ""
+  auth:
+    # Optional for shipper.mode=alloy with existingSecret: "basic" or "bearer"
+    type: ""
+    existingSecret: ""
+    username: ""
+    password: ""
+    bearerToken: ""
+
+# Note: "enabled" is intentionally omitted from loki, prometheus, and grafana so
+# Helm v4 tags.standalone controls all three subcharts unless explicitly overridden.
+# Keys under "loki:" map directly to the grafana-community/loki subchart schema.
+loki:
+  # Bundled Loki subchart overrides (used when tags.standalone=true)
+  deploymentMode: SingleBinary
+  loki:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+    schemaConfig:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+    limits_config:
+      max_query_series: 5000
+      retention_period: 168h
+  singleBinary:
+    replicas: 1
+    persistence:
+      enabled: true
+      size: 10Gi
+  read:
+    replicas: 0
+  write:
+    replicas: 0
+  backend:
+    replicas: 0
+  chunksCache:
+    enabled: false
+  resultsCache:
+    enabled: false
+  lokiCanary:
+    enabled: false
+  test:
+    enabled: false
+  gateway:
+    enabled: false
+
+prometheus:
+  alertmanager:
+    enabled: false
+  kube-state-metrics:
+    enabled: false
+  prometheus-node-exporter:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  server:
+    persistentVolume:
+      size: 8Gi
+
+grafana:
+  dashboardConfigMap:
+    enabled: false
+    namespace: ""
+    label: grafana_dashboard
+    labelValue: "1"
+    folderAnnotation: "Networking"
+    additionalLabels: {}
+  externalPrometheusUrl: ""
+  datasourceUids:
+    loki: ""
+    prometheus: ""
+  sankey:
+    # "echarts" uses signed volkovlabs-echarts-panel; "netsage" uses netsage-sankey-panel
+    engine: "echarts"
+
+  # Bundled Grafana subchart overrides (used when tags.standalone=true)
+  plugins:
+    - volkovlabs-echarts-panel
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      searchNamespace: ALL
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: "1"
+      searchNamespace: ALL

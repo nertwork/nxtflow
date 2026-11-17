@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 256" width="960" height="256">
+  <defs>
+    <linearGradient id="bgCard" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b101b"/>
+      <stop offset="50%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1a2236"/>
+    </linearGradient>
+    <linearGradient id="iconBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="ribbon1" gradientUnits="userSpaceOnUse" x1="76" y1="0" x2="436" y2="0">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <linearGradient id="ribbon2" gradientUnits="userSpaceOnUse" x1="76" y1="0" x2="436" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="wordGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#e0f2fe"/>
+      <stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="952" height="248" rx="36" ry="36" fill="url(#bgCard)" stroke="#1e293b" stroke-width="4"/>
+
+  <g transform="translate(36, 32) scale(0.375)">
+    <rect x="16" y="16" width="480" height="480" rx="112" ry="112" fill="url(#iconBg)" stroke="#334155" stroke-width="8"/>
+    <path d="M 76 142 C 158 142, 178 232, 256 256 C 334 280, 354 370, 436 370" fill="none" stroke="url(#ribbon1)" stroke-width="24" stroke-linecap="round"/>
+    <path d="M 76 256 L 436 256" fill="none" stroke="url(#ribbon2)" stroke-width="28" stroke-linecap="round"/>
+    <path d="M 76 370 C 158 370, 178 280, 256 256 C 334 232, 354 142, 436 142" fill="none" stroke="url(#ribbon1)" stroke-width="24" stroke-linecap="round"/>
+    <circle cx="80" cy="142" r="14" fill="#38bdf8"/>
+    <circle cx="80" cy="256" r="16" fill="#22d3ee"/>
+    <circle cx="80" cy="370" r="14" fill="#0a84ff"/>
+    <circle cx="432" cy="142" r="14" fill="#a5b4fc"/>
+    <circle cx="432" cy="256" r="16" fill="#6366f1"/>
+    <circle cx="432" cy="370" r="14" fill="#818cf8"/>
+    <circle cx="256" cy="256" r="62" fill="#0f172a" stroke="#7dd3fc" stroke-width="5"/>
+    <circle cx="256" cy="256" r="44" fill="#0a84ff"/>
+    <circle cx="256" cy="256" r="12" fill="#ffffff"/>
+  </g>
+
+  <text x="268" y="138" font-family="Inter, DejaVu Sans, Liberation Sans, sans-serif" font-size="96" font-weight="800" letter-spacing="-2" fill="url(#wordGrad)">nxt<tspan fill="url(#accentGrad)">flow</tspan></text>
+  <text x="272" y="186" font-family="Inter, DejaVu Sans, Liberation Sans, sans-serif" font-size="22" font-weight="600" letter-spacing="4.5" fill="#94a3b8">AI-READY NETWORK FLOW TELEMETRY</text>
+</svg>

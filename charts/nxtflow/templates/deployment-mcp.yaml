@@ -1,0 +1,127 @@
+{{- if .Values.mcp.enabled -}}
+{{- include "nxtflow.validateConfig" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-mcp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: mcp
+spec:
+  replicas: {{ .Values.mcp.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nxtflow.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: mcp
+  template:
+    metadata:
+      labels:
+        {{- include "nxtflow.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: mcp
+    spec:
+      containers:
+        - name: mcp
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
+          args:
+            - "--transport"
+            - {{ .Values.mcp.transport | quote }}
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - {{ .Values.mcp.port | quote }}
+            {{- if .Values.mcp.statelessHttp }}
+            - "--stateless-http"
+            {{- end }}
+          env:
+            - name: NXTFLOW_LOKI_URL
+              value: {{ include "nxtflow.lokiUrl" . | quote }}
+            - name: NXTFLOW_JOB
+              value: {{ .Values.collector.job | quote }}
+            - name: NXTFLOW_TLS_VERIFY
+              {{- if .Values.externalLoki.tls.insecureSkipVerify }}
+              value: "false"
+              {{- else if .Values.externalLoki.tls.caFile }}
+              value: {{ .Values.externalLoki.tls.caFile | quote }}
+              {{- else }}
+              value: "true"
+              {{- end }}
+            - name: NXTFLOW_EXCLUDED_HOSTS
+              value: {{ join "," .Values.enricher.classification.excludedHosts | quote }}
+            {{- if .Values.externalLoki.tenantId }}
+            - name: NXTFLOW_LOKI_TENANT_ID
+              value: {{ .Values.externalLoki.tenantId | quote }}
+            {{- end }}
+            {{- if or (include "nxtflow.hasInlineLokiAuth" .) .Values.externalLoki.auth.existingSecret }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.username }}
+            - name: NXTFLOW_LOKI_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: username
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.password }}
+            - name: NXTFLOW_LOKI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: password
+                  optional: true
+            {{- end }}
+            {{- if or .Values.externalLoki.auth.existingSecret .Values.externalLoki.auth.bearerToken }}
+            - name: NXTFLOW_LOKI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nxtflow.lokiAuthSecretName" . }}
+                  key: bearerToken
+                  optional: true
+            {{- end }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.mcp.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+          {{- if or .Values.externalLoki.tls.existingCaConfigMap .Values.mcp.extraVolumeMounts }}
+          volumeMounts:
+            {{- if .Values.externalLoki.tls.existingCaConfigMap }}
+            - name: external-loki-ca
+              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.mcp.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+      {{- if or .Values.externalLoki.tls.existingCaConfigMap .Values.mcp.extraVolumes }}
+      volumes:
+        {{- if .Values.externalLoki.tls.existingCaConfigMap }}
+        - name: external-loki-ca
+          configMap:
+            name: {{ .Values.externalLoki.tls.existingCaConfigMap }}
+        {{- end }}
+        {{- with .Values.mcp.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+{{- end }}

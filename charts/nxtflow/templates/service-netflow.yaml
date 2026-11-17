@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nxtflow.fullname" . }}-netflow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nxtflow.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+  {{- with .Values.collector.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.collector.service.type }}
+  {{- if or (eq .Values.collector.service.type "LoadBalancer") (eq .Values.collector.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.collector.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if and (eq .Values.collector.service.type "LoadBalancer") .Values.collector.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.collector.service.loadBalancerIP }}
+  {{- end }}
+  selector:
+    {{- include "nxtflow.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+  ports:
+    - name: netflow
+      port: {{ .Values.collector.service.netflowPort }}
+      targetPort: netflow
+      protocol: UDP
+    - name: sflow
+      port: {{ .Values.collector.service.sflowPort }}
+      targetPort: sflow
+      protocol: UDP
