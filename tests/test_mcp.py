@@ -6,6 +6,7 @@ import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
 from starlette.testclient import TestClient
 
 from nxtflow.config import NxtflowConfig
@@ -157,3 +158,46 @@ def test_tier5_mcp_bad_tls_returns_error_json_and_empty_port_env(tmp_path, monke
             assert "Invalid TLS configuration" in payload["error"]
 
     asyncio.run(_invoke_all())
+
+
+def test_mcp_port_and_env_validation(monkeypatch) -> None:
+    invalid_ports = [
+        "\u00b2",
+        "\u0662",
+        "0",
+        "65536",
+        "-1",
+        "tcp://10.96.12.34:8000",
+        "abc",
+        "",
+    ]
+    for bad_port in invalid_ports:
+        monkeypatch.setenv("NXTFLOW_MCP_PORT", bad_port)
+        assert parse_args([]).port == 8000
+        assert parse_args(["--port", "9001"]).port == 9001
+
+    monkeypatch.setenv("NXTFLOW_MCP_PORT", "\u00b2")
+    with pytest.raises(SystemExit) as help_exc:
+        parse_args(["--help"])
+    assert help_exc.value.code == 0
+
+    monkeypatch.setenv("NXTFLOW_MCP_PORT", " 8080 ")
+    assert parse_args([]).port == 8080
+
+    monkeypatch.delenv("NXTFLOW_MCP_PORT", raising=False)
+    for bad_cli_port in ("0", "65536", "-1", "abc", "\u00b2", "\u0662"):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["--port", bad_cli_port])
+        assert exc_info.value.code == 2
+
+    monkeypatch.setenv("NXTFLOW_MCP_TRANSPORT", "invalid-transport")
+    assert parse_args([]).transport == "stdio"
+    monkeypatch.setenv("NXTFLOW_MCP_TRANSPORT", "")
+    assert parse_args([]).transport == "stdio"
+    monkeypatch.setenv("NXTFLOW_MCP_TRANSPORT", "STREAMABLE-HTTP")
+    assert parse_args([]).transport == "streamable-http"
+
+    monkeypatch.setenv("NXTFLOW_MCP_HOST", "tcp://10.96.12.34:8000")
+    assert parse_args([]).host == "127.0.0.1"
+    monkeypatch.setenv("NXTFLOW_MCP_HOST", " 0.0.0.0 ")
+    assert parse_args([]).host == "0.0.0.0"
