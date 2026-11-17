@@ -52,13 +52,14 @@ data:
         {{- else if .Values.externalLoki.auth.existingSecret }}
         // Set externalLoki.auth.type ("basic" or "bearer") to enable basic_auth or bearer_token with existingSecret.
         {{- end }}
-        {{- if or .Values.externalLoki.tls.insecureSkipVerify .Values.externalLoki.tls.caFile }}
+        {{- $caFile := include "nxtflow.externalLokiCaFile" . }}
+        {{- if or .Values.externalLoki.tls.insecureSkipVerify $caFile }}
         tls_config {
           {{- if .Values.externalLoki.tls.insecureSkipVerify }}
           insecure_skip_verify = true
           {{- end }}
-          {{- if .Values.externalLoki.tls.caFile }}
-          ca_file = {{ .Values.externalLoki.tls.caFile | quote }}
+          {{- if $caFile }}
+          ca_file = {{ $caFile | quote }}
           {{- end }}
         }
         {{- end }}

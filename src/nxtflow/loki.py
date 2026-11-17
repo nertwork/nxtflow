@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+import math
 import ssl
 import subprocess
 import time
@@ -30,12 +31,27 @@ class LokiError(RuntimeError):
     """Raised when Loki returns an error or cannot be reached."""
 
 
+def _safe_int(val: Any, default: int = 0) -> int:
+    if isinstance(val, bool) or val is None:
+        return default
+    try:
+        num = float(val)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(num):
+        return default
+    return int(num)
+
+
 def _build_ssl_context(tls_verify: bool | str) -> ssl.SSLContext:
-    if tls_verify is False:
-        return ssl._create_unverified_context()
-    if isinstance(tls_verify, str):
-        return ssl.create_default_context(cafile=tls_verify)
-    return ssl.create_default_context()
+    try:
+        if tls_verify is False:
+            return ssl._create_unverified_context()
+        if isinstance(tls_verify, str):
+            return ssl.create_default_context(cafile=tls_verify)
+        return ssl.create_default_context()
+    except (OSError, ssl.SSLError) as exc:
+        raise LokiError(f"Invalid TLS configuration ({tls_verify!r}): {exc}") from exc
 
 
 def _percentile_95(values: list[float]) -> float:
@@ -76,7 +92,9 @@ def _extract_metric_results(data: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(raw_val, (list, tuple)) and len(raw_val) > 1:
             try:
                 value = float(raw_val[1])
-            except (TypeError, ValueError):
+                if not math.isfinite(value):
+                    value = 0.0
+            except (TypeError, ValueError, OverflowError):
                 value = 0.0
         else:
             value = 0.0
@@ -109,6 +127,9 @@ class LokiClient:
         suffix = f"{endpoint}?{qs}" if qs else endpoint
         headers = self._build_headers()
 
+        if self.config.use_kubectl and not self.config.kube_context:
+            raise LokiError("kubectl fallback requested but kube_context is not configured")
+
         if not (self.config.use_kubectl and self.config.kube_context):
             try:
                 req = urllib.request.Request(f"{self.config.loki_url}{suffix}", headers=headers)
@@ -126,12 +147,17 @@ class LokiClient:
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace").strip()
                 raise LokiError(f"HTTP {exc.code}: {body[:200]}") from exc
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, http.client.HTTPException, OSError) as exc:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                json.JSONDecodeError,
+                http.client.HTTPException,
+                OSError,
+                UnicodeDecodeError,
+                ValueError,
+            ) as exc:
                 if not self.config.kube_context:
                     raise LokiError(f"Loki request failed ({self.config.loki_url}): {exc}") from exc
-
-        if not self.config.kube_context:
-            raise LokiError("kubectl fallback requested but kube_context is not configured")
 
         cluster_url = f"{self.config.cluster_loki_url}{suffix}"
         req_payload = json.dumps({"url": cluster_url, "headers": headers})
@@ -356,7 +382,9 @@ class LokiClient:
                         ts, val = entry[0], entry[1]
                         try:
                             v = float(val)
-                        except (TypeError, ValueError):
+                        except (TypeError, ValueError, OverflowError):
+                            continue
+                        if not math.isfinite(v):
                             continue
                         rate_vals.append(v)
                         total_series[ts] = total_series.get(ts, 0.0) + v
@@ -516,7 +544,7 @@ class LokiClient:
         for line in lines:
             dirs[str(line.get("dir") or "?")] += 1
             sites[str(line.get("site") or "?")] += 1
-            b = int(line.get("bytes") or 0)
+            b = _safe_int(line.get("bytes"), 0)
             total_bytes += b
             src = str(line.get("src_host") or "")
             dst = str(line.get("dst_host") or "")
@@ -528,7 +556,15 @@ class LokiClient:
             if peer:
                 peers[peer] += b
             raw_port = line.get("dst_port")
-            ports["?" if raw_port is None or raw_port == "" else raw_port] += b
+            if raw_port is None or raw_port == "":
+                port_key: int | str = "?"
+            elif isinstance(raw_port, (int, str)) and not isinstance(raw_port, bool):
+                port_key = raw_port
+            elif isinstance(raw_port, float) and math.isfinite(raw_port):
+                port_key = int(raw_port) if raw_port.is_integer() else str(raw_port)
+            else:
+                port_key = str(raw_port)
+            ports[port_key] += b
         return {
             "host": name,
             "flows": len(lines),
@@ -565,7 +601,7 @@ class LokiClient:
                 str(line.get("proto") or ""),
             )
             sessions[key] += 1
-            session_bytes[key] += int(line.get("bytes") or 0)
+            session_bytes[key] += _safe_int(line.get("bytes"), 0)
         sorted_sessions = sorted(session_bytes.items(), key=lambda x: x[1], reverse=True)
         return [
             {

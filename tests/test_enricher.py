@@ -1133,3 +1133,503 @@ def test_loki_shipper_skips_eager_ca_validation_for_file_and_alloy_modes(tmp_pat
             EnricherConfig(shipper_mode="direct", loki_url="https://loki.example.com", loki_ca_file=missing_ca),
             metrics,
         )
+
+
+def test_tier5_gzip_bomb_and_chunk_trailers_bounded(tmp_path: Path) -> None:
+    from nxtflow.enricher.app import PayloadTooLargeError, parse_goflow2_payload
+
+    # Direct decompression bound rejects 2 MiB bomb even when compressed small
+    bomb_raw = b'{"src_addr":"192.168.1.10","dst_addr":"1.1.1.1","pad":"' + (b"A" * (2 * 1024 * 1024)) + b'"}'
+    bomb_gz = gzip.compress(bomb_raw, compresslevel=9)
+    assert len(bomb_gz) < 65536
+    with pytest.raises(PayloadTooLargeError):
+        parse_goflow2_batch(bomb_gz, content_encoding="gzip", max_decompressed_bytes=655360)
+    with pytest.raises(PayloadTooLargeError):
+        parse_goflow2_batch(bomb_gz, content_encoding="gzip", max_decompressed_bytes=0)
+
+    # Empty gzip, multi-member gzip, trailing garbage, truncated gzip
+    assert parse_goflow2_batch(b"", content_encoding="gzip") == ([], 0)
+    m1 = gzip.compress(b'{"src_addr":"192.168.1.10","dst_addr":"1.1.1.1"}\n')
+    m2 = gzip.compress(b'{"src_addr":"192.168.1.11","dst_addr":"8.8.8.8"}\n')
+    recs = parse_goflow2_payload(m1 + m2, content_encoding="gzip")
+    assert len(recs) == 2
+    assert parse_goflow2_batch(m1 + b"\x00\x00", content_encoding="gzip")[0][0]["src_addr"] == "192.168.1.10"
+    with pytest.raises(ValueError, match="trailing non-gzip"):
+        parse_goflow2_batch(m1 + b"GARBAGE", content_encoding="gzip")
+    with pytest.raises(ValueError, match="truncated gzip"):
+        parse_goflow2_batch(m1[:-8], content_encoding="gzip")
+
+    # HTTP /ingest returns 413 for gzip bomb and excessive chunk trailers
+    cfg = EnricherConfig(
+        http_enabled=True,
+        http_listen_addr="127.0.0.1:0",
+        metrics_listen_addr="127.0.0.1:0",
+        max_body_bytes=65536,
+        rdns_enabled=False,
+    )
+    p = EnricherPipeline(cfg)
+    p.start()
+    try:
+        def _exchange(req: bytes) -> tuple[int, dict[str, str]]:
+            with socket.create_connection(("127.0.0.1", p.http_port), timeout=5.0) as s:
+                s.sendall(req)
+                raw_resp = b""
+                while b"\r\n\r\n" not in raw_resp:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        break
+                    raw_resp += chunk
+                hdr_bytes = raw_resp.partition(b"\r\n\r\n")[0].decode("latin1")
+                lines = hdr_bytes.split("\r\n")
+                status = int(lines[0].split(" ", 2)[1])
+                hdrs = {k.strip().lower(): v.strip() for ln in lines[1:] if ":" in ln for k, v in [ln.split(":", 1)]}
+                return status, hdrs
+
+        gz_req = (
+            b"POST /ingest HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Content-Encoding: gzip\r\n"
+            + f"Content-Length: {len(bomb_gz)}\r\n\r\n".encode("ascii")
+            + bomb_gz
+        )
+        st, hdrs = _exchange(gz_req)
+        assert st == 413
+        assert hdrs.get("connection", "").lower() == "close"
+
+        trailers = b"".join(f"X-Pad-{i}: val\r\n".encode("ascii") for i in range(70))
+        chunk_req = (
+            b"POST /ingest HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n"
+            b"2\r\n{}\r\n0\r\n"
+            + trailers
+            + b"\r\n"
+        )
+        st_tr, hdrs_tr = _exchange(chunk_req)
+        assert st_tr == 413
+        assert hdrs_tr.get("connection", "").lower() == "close"
+        assert "nxtflow_dropped_flows_total 1.0" in p.metrics.render().decode("utf-8")
+    finally:
+        p.stop()
+
+
+def test_tier5_non_finite_negative_counters_and_stdin_utf8(tmp_path: Path) -> None:
+    # 1) NaN / Infinity rejected in JSON & NDJSON
+    with pytest.raises(ValueError, match="Non-finite"):
+        parse_goflow2_batch(b'{"src_addr":"192.168.1.1","dst_addr":"1.1.1.1","bytes":NaN}')
+    with pytest.raises(ValueError, match="Non-finite"):
+        parse_goflow2_batch(b'{"src_addr":"192.168.1.1","dst_addr":"1.1.1.1","bytes":Infinity}')
+    ndjson = (
+        b'{"src_addr":"192.168.1.1","dst_addr":"1.1.1.1","bytes":Infinity}\n'
+        b'{"src_addr":"192.168.1.2","dst_addr":"1.1.1.1","bytes":100}\n'
+    )
+    recs, errs = parse_goflow2_batch(ndjson)
+    assert len(recs) == 1 and errs == 1
+
+    # 2) Negative/bool/NaN bytes rejected BEFORE incrementing flows_received; time_received_ns inf safe
+    cfg = EnricherConfig(
+        http_enabled=False,
+        metrics_listen_addr="127.0.0.1:0",
+        rdns_enabled=False,
+        shipper_mode="file",
+        shipper_file_path=str(tmp_path / "out.jsonl"),
+    )
+    p = EnricherPipeline(cfg)
+    accepted, enrich_errs = p.ingest_records(
+        [
+            {"src_addr": "192.168.1.10", "dst_addr": "1.1.1.1", "bytes": -5, "packets": 1},
+            {"src_addr": "192.168.1.10", "dst_addr": "1.1.1.1", "bytes": True, "packets": 1},
+            {"src_addr": "192.168.1.10", "dst_addr": "1.1.1.1", "bytes": float("nan"), "packets": 1},
+            {"src_addr": "192.168.1.10", "dst_addr": "1.1.1.1", "bytes": "1e2000", "packets": 1},
+            {"src_addr": "192.168.1.10", "dst_addr": "1.1.1.1", "bytes": 42, "time_received_ns": float("inf")},
+        ]
+    )
+    assert accepted == 1
+    assert enrich_errs == 4
+    metrics_txt = p.metrics.render().decode("utf-8")
+    assert "nxtflow_dropped_flows_total 4.0" in metrics_txt
+    assert 'nxtflow_flows_received_total{dir="up",proto="",site="default"} 1.0' in metrics_txt
+
+    # 3) Stdin reader survives UnicodeDecodeError & malformed values without dying
+    class FlakyStream:
+        def __init__(self) -> None:
+            self._items = [
+                UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"),
+                "   \n",
+                '{"src_addr":"192.168.1.10","dst_addr":"1.1.1.1","bytes":77,"proto":"tcp"}\n',
+                "",
+            ]
+
+        def readline(self) -> str:
+            nxt = self._items.pop(0)
+            if isinstance(nxt, Exception):
+                raise nxt
+            return nxt
+
+    p2 = EnricherPipeline(
+        EnricherConfig(
+            http_enabled=False,
+            metrics_listen_addr="127.0.0.1:0",
+            stdin_enabled=True,
+            rdns_enabled=False,
+            shipper_mode="file",
+            shipper_file_path=str(tmp_path / "stdin_out.jsonl"),
+        ),
+        stdin_stream=FlakyStream(),  # type: ignore[arg-type]
+    )
+    p2._run_stdin_reader()
+    p2.flush()
+    assert "nxtflow_dropped_flows_total 1.0" in p2.metrics.render().decode("utf-8")
+    assert '"bytes":77' in (tmp_path / "stdin_out.jsonl").read_text(encoding="utf-8")
+
+
+def test_tier5_config_bounds_null_yaml_ipv6_netbox_and_proto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from nxtflow.enricher.app import _parse_host_port, _parse_named_cidrs
+    from nxtflow.enricher.app import main as enricher_main
+
+    # Gap 3: zero/negative config bounds clamped cleanly without shipper crash
+    bounded = EnricherConfig(
+        ring_buffer_max_flows=0,
+        batch_max_entries=-5,
+        batch_max_wait_seconds=0,
+        max_body_bytes=-10,
+        file_poll_interval=0,
+        netbox_sync_interval=0,
+        default_sampling_rate=0,
+        max_retries=-3,
+        shipper_mode="file",
+        shipper_file_path=str(tmp_path / "bounded.jsonl"),
+    )
+    assert bounded.ring_buffer_max_flows == 1
+    assert bounded.batch_max_entries == 1
+    assert bounded.batch_max_wait_seconds >= 0.01
+    assert bounded.max_body_bytes == 0
+    assert bounded.file_poll_interval >= 0.01
+    assert bounded.netbox_sync_interval >= 1.0
+    shipper = LokiShipper(bounded, EnricherMetrics())
+    shipper.enqueue(1, {"bytes": 1})
+    shipper.enqueue(2, {"bytes": 2})
+    shipper.flush()
+    assert (tmp_path / "bounded.jsonl").is_file()
+
+    # Gap 5: missing explicit config raises FileNotFoundError; YAML null preserves defaults; YAMLError -> exit 2
+    missing = tmp_path / "missing.yaml"
+    with pytest.raises(FileNotFoundError):
+        load_enricher_config(config_file=missing)
+    monkeypatch.setenv("NXTFLOW_CONFIG_FILE", str(missing))
+    with pytest.raises(FileNotFoundError):
+        load_enricher_config()
+    monkeypatch.delenv("NXTFLOW_CONFIG_FILE")
+
+    null_cfg_path = tmp_path / "null_enricher.yaml"
+    null_cfg_path.write_text(
+        """
+collector:
+  site: null
+  job: null
+ingest:
+  http:
+    listenAddr: null
+    maxBodyBytes: null
+  file:
+    path: null
+    pollIntervalSeconds: null
+metrics:
+  listenAddr: null
+sampling:
+  defaultSamplingRate: null
+classification:
+  localCidrs: [null, "10.0.0.0/8"]
+  wanIps: [null, "2001:0db8::0001"]
+  excludedHosts: [null, "ignore-me"]
+resolution:
+  staticHosts:
+    "10.0.0.5": null
+    "10.0.0.6": "web-6"
+  extraCidrs:
+    - {cidr: null, name: "bad"}
+    - {cidr: "203.0.113.0/24", name: "doc-net"}
+shipper:
+  mode: null
+  loki:
+    url: null
+    batchMaxEntries: null
+""",
+        encoding="utf-8",
+    )
+    loaded = load_enricher_config(config_file=null_cfg_path)
+    assert loaded.site == "default"
+    assert loaded.job == "nxtflow"
+    assert loaded.http_listen_addr == "0.0.0.0:8081"
+    assert loaded.static_hosts == {"10.0.0.6": "web-6"}
+    assert _parse_named_cidrs(loaded.extra_cidrs)[0][1] == "doc-net"
+
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("collector: [unclosed", encoding="utf-8")
+    assert enricher_main(["--config", str(bad_yaml)]) == 2
+    assert enricher_main(["--config", str(missing)]) == 2
+
+    # Gap 8 & 10 & 14: IPv6 listenAddr, IPv6 wan_ips canonicalization, bounded proto
+    assert _parse_host_port("[::1]:9000") == ("::1", 9000)
+    assert _parse_host_port("[::1]") == ("::1", 8081)
+    assert _parse_host_port("::1") == ("::1", 8081)
+    assert _parse_host_port("") == ("0.0.0.0", 8081)
+    assert _parse_host_port("localhost") == ("localhost", 8081)
+    with pytest.raises(ValueError, match="Invalid bracketed"):
+        _parse_host_port("[::1")
+
+    p_v6 = EnricherPipeline(
+        EnricherConfig(
+            http_enabled=False,
+            metrics_listen_addr="127.0.0.1:0",
+            rdns_enabled=False,
+            wan_ips=["2001:0db8::0001"],
+        )
+    )
+    assert p_v6.is_local_ip("2001:db8::1") is True
+    assert p_v6.classify_direction("2001:db8::1", "1.1.1.1") == "up"
+
+    assert normalize_proto("icmpv6") == "ICMPv6"
+    assert normalize_proto(99) == "99"
+    assert normalize_proto(999) == "OTHER"
+    assert normalize_proto(True) == "OTHER"
+    assert normalize_proto("ATTACKER_ARBITRARY_PROTO_XYZ") == "OTHER"
+
+
+def test_tier5_netbox_non_dict_and_bad_next_scheme(tmp_path: Path) -> None:
+    mode = ["bad_next"]
+
+    class EvilNBHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def do_GET(self) -> None:
+            payload = {
+                "results": [
+                    {
+                        "address": "10.0.0.9/24",
+                        "dns_name": "",
+                        "assigned_object": {"virtual_machine": "not-a-dict", "device": None},
+                    }
+                ],
+                "next": "file:///etc/passwd" if mode[0] == "bad_next" else None,
+            }
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), EvilNBHandler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        cfg = EnricherConfig(
+            http_enabled=False,
+            metrics_listen_addr="127.0.0.1:0",
+            rdns_enabled=False,
+            netbox_enabled=True,
+            netbox_url=f"http://127.0.0.1:{srv.server_address[1]}",
+        )
+        p = EnricherPipeline(cfg)
+        assert p.netbox.sync_once() is False
+        assert "nxtflow_netbox_sync_errors_total 1.0" in p.metrics.render().decode("utf-8")
+        mode[0] = "ok"
+        assert p.netbox.sync_once() is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_tier5_enricher_env_http_edges_and_shipper_auth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from nxtflow.enricher.app import _parse_bool
+
+    assert _parse_bool("yes") is True
+    assert _parse_bool("off") is False
+    assert _parse_bool("unknown", default=True) is True
+
+    monkeypatch.setenv("NXTFLOW_SITE", "dhc1")
+    monkeypatch.setenv("NXTFLOW_JOB", "netflow")
+    monkeypatch.setenv("NXTFLOW_HTTP_LISTEN", "127.0.0.1:0")
+    monkeypatch.setenv("NXTFLOW_METRICS_LISTEN", "127.0.0.1:0")
+    monkeypatch.setenv("NXTFLOW_INPUT_FILE", "-")
+    monkeypatch.setenv("NXTFLOW_LOKI_TENANT_ID", "t1")
+    monkeypatch.setenv("NXTFLOW_LOKI_USER", "u1")
+    monkeypatch.setenv("NXTFLOW_LOKI_PASSWORD", "p1")
+    monkeypatch.setenv("NXTFLOW_LOKI_TOKEN", "tok1")
+    monkeypatch.setenv("NXTFLOW_TLS_VERIFY", "false")
+    monkeypatch.setenv("NXTFLOW_NETBOX_ENABLED", "true")
+    monkeypatch.setenv("NXTFLOW_NETBOX_URL", "https://nb.example.com/")
+    monkeypatch.setenv("NXTFLOW_NETBOX_TOKEN", "nbtok")
+    monkeypatch.setenv("NXTFLOW_NETBOX_TLS_VERIFY", "false")
+    env_cfg = load_enricher_config()
+    assert env_cfg.site == "dhc1"
+    assert env_cfg.stdin_enabled is True and env_cfg.file_enabled is False
+    assert env_cfg.loki_tenant_id == "t1"
+    assert env_cfg.loki_username == "u1"
+    assert env_cfg.netbox_enabled is True
+
+    # Test HTTP /readyz, 404, bad Content-Length, incomplete body, empty body, and metrics /healthz + 404
+    p = EnricherPipeline(
+        EnricherConfig(
+            http_enabled=True,
+            http_listen_addr="127.0.0.1:0",
+            metrics_listen_addr="127.0.0.1:0",
+            rdns_enabled=False,
+        )
+    )
+    p.start()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{p.http_port}/readyz", timeout=3) as r:
+            assert r.status == 200
+        with urllib.request.urlopen(f"http://127.0.0.1:{p.metrics_port}/healthz", timeout=3) as r:
+            assert r.status == 200
+        with pytest.raises(urllib.error.HTTPError) as exc404:
+            urllib.request.urlopen(f"http://127.0.0.1:{p.metrics_port}/missing", timeout=3)
+        assert exc404.value.code == 404
+
+        def _send_raw(raw_req: bytes) -> int:
+            with socket.create_connection(("127.0.0.1", p.http_port), timeout=3.0) as s:
+                s.sendall(raw_req)
+                s.shutdown(socket.SHUT_WR)
+                line = s.recv(1024).split(b"\r\n", 1)[0]
+                return int(line.split(b" ", 2)[1])
+
+        assert _send_raw(b"GET /nope HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n") == 404
+        assert _send_raw(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") == 404
+        assert _send_raw(b"POST /ingest HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n") == 400
+        assert _send_raw(b"POST /ingest HTTP/1.1\r\nHost: x\r\nContent-Length: 50\r\n\r\nshort") == 400
+        assert _send_raw(b"POST /ingest HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n") == 202
+    finally:
+        p.stop()
+
+    # Shipper header construction (bearer & basic)
+    s_bearer = LokiShipper(EnricherConfig(loki_bearer_token="btok", loki_tenant_id="org1"), EnricherMetrics())
+    hdr_b = s_bearer._build_loki_headers()
+    assert hdr_b["Authorization"] == "Bearer btok"
+    assert hdr_b["X-Scope-OrgID"] == "org1"
+
+    s_basic = LokiShipper(EnricherConfig(loki_username="u", loki_password="p"), EnricherMetrics())
+    assert s_basic._build_loki_headers()["Authorization"].startswith("Basic ")
+
+
+def test_tier5_enricher_yaml_sections_and_main_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from unittest.mock import patch
+
+    import nxtflow.enricher.app as enr_app
+
+    full_yaml = tmp_path / "full-enricher.yaml"
+    full_yaml.write_text(
+        f"""
+collector:
+  site: dhc1
+  job: custom-job
+  includeSamplerLabel: true
+ingest:
+  http:
+    enabled: false
+    listenAddr: 127.0.0.1:0
+    maxBodyBytes: 1048576
+    maxDecompressedBytes: 4194304
+  file:
+    enabled: true
+    path: {tmp_path / "goflow.jsonl"}
+    pollIntervalSeconds: 0.1
+    positionFile: {tmp_path / "pos"}
+    truncateAtBytes: 8192
+  stdin:
+    enabled: false
+sampling:
+  respectSamplingRate: true
+  defaultSamplingRate: 2
+metrics:
+  listenAddr: 127.0.0.1:0
+classification:
+  localCidrs: ["10.0.0.0/8"]
+  wanIps: ["198.51.100.10"]
+  internalCidrs: [{{"cidr": "100.64.0.0/10", "label": "cgnat"}}]
+  excludedHosts: ["multicast"]
+resolution:
+  staticHosts: {{"10.0.0.5": "fw01"}}
+  services: {{"198.51.100.20": "Edge-Svc"}}
+  extraCidrs: [{{"cidr": "203.0.113.0/24", "label": "Partner"}}]
+  useDefaultCidrs: false
+  rdns:
+    enabled: false
+    private: true
+    timeoutSeconds: 0.5
+    maxEntries: 500
+    ttlSeconds: 60
+    negativeTtlSeconds: 15
+netbox:
+  enabled: false
+  url: https://netbox.example.com/
+  token: nb-tok
+  tlsVerify: false
+  syncIntervalSeconds: 30
+  timeoutSeconds: 4
+  stripDomain: true
+shipper:
+  mode: file
+  loki:
+    url: https://loki.example.com/
+    tenantId: t1
+    username: u1
+    password: p1
+    bearerToken: b1
+    tlsVerify: true
+    caFile: ""
+    timeoutSeconds: 5
+    batchMaxEntries: 50
+    batchMaxWaitSeconds: 0.2
+    ringBufferMaxFlows: 200
+    maxRetries: 2
+    initialBackoffSeconds: 0.1
+    maxBackoffSeconds: 1.0
+  file:
+    path: {tmp_path / "shipped.jsonl"}
+    truncateAtBytes: 4096
+""",
+        encoding="utf-8",
+    )
+    cfg = load_enricher_config(config_file=full_yaml)
+    assert cfg.site == "dhc1"
+    assert cfg.job == "custom-job"
+    assert cfg.services == {"198.51.100.20": "Edge-Svc"}
+    assert cfg.rdns_private is True
+    assert cfg.rdns_max_entries == 500
+    assert cfg.netbox_url == "https://netbox.example.com"
+    assert cfg.netbox_tls_verify is False
+    assert cfg.loki_tenant_id == "t1"
+    assert cfg.loki_username == "u1"
+    assert cfg.loki_password == "p1"
+    assert cfg.loki_bearer_token == "b1"
+    assert cfg.shipper_file_truncate_bytes == 4096
+
+    # Missing explicit config -> exit 2 cleanly
+    assert enr_app.main(["--config", str(tmp_path / "missing.yaml")]) == 2
+    assert "Error loading enricher configuration" in capsys.readouterr().err
+
+    with (
+        patch.object(enr_app.EnricherPipeline, "start"),
+        patch.object(enr_app.EnricherPipeline, "stop"),
+        patch.object(enr_app.signal, "signal"),
+    ):
+        real_event = threading.Event()
+        real_event.set()
+        with patch.object(enr_app.threading, "Event", return_value=real_event):
+            assert enr_app.main(["--config", str(full_yaml), "--stdin", "--input-file", "-"]) == 0
+            assert enr_app.main(["--config", str(full_yaml), "--input-file", str(tmp_path / "goflow.jsonl")]) == 0
+
+    with (
+        patch.object(enr_app.EnricherPipeline, "start", side_effect=OSError("port in use")),
+        patch.object(enr_app.EnricherPipeline, "stop"),
+        patch.object(enr_app.signal, "signal"),
+    ):
+        assert enr_app.main(["--config", str(full_yaml)]) == 2
+        assert "Error starting enricher pipeline" in capsys.readouterr().err

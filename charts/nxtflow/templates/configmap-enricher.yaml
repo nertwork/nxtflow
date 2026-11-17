@@ -26,7 +26,7 @@ data:
       stdin:
         enabled: {{ .Values.enricher.ingest.stdin.enabled }}
     metrics:
-      listenAddr: {{ .Values.enricher.metrics.listenAddr | quote }}
+      listenAddr: {{ include "nxtflow.enricherMetricsListenAddr" . | quote }}
     sampling:
       respectSamplingRate: {{ .Values.enricher.sampling.respectSamplingRate }}
       defaultSamplingRate: {{ .Values.enricher.sampling.defaultSamplingRate | int64 }}
@@ -67,7 +67,7 @@ data:
         url: {{ include "nxtflow.lokiUrl" . | quote }}
         tenantId: {{ .Values.externalLoki.tenantId | quote }}
         tlsVerify: {{ not .Values.externalLoki.tls.insecureSkipVerify }}
-        caFile: {{ .Values.externalLoki.tls.caFile | quote }}
+        caFile: {{ include "nxtflow.externalLokiCaFile" . | quote }}
         timeoutSeconds: {{ .Values.enricher.shipper.loki.timeoutSeconds }}
         batchMaxEntries: {{ .Values.enricher.shipper.loki.batchMaxEntries | int64 }}
         batchMaxWaitSeconds: {{ .Values.enricher.shipper.loki.batchMaxWaitSeconds }}

@@ -18,7 +18,7 @@ DEFAULT_KUBE_TARGET = "deploy/nxtflow-enricher"
 DEFAULT_CLUSTER_LOKI_URL = "http://localhost:3100"
 MAX_RANGE_SECONDS = 30 * 86400  # 30d
 
-_RANGE_RE = re.compile(r"^([1-9]\d*)([smhd])$")
+_RANGE_RE = re.compile(r"^([1-9]\d*)([smhd])$", re.ASCII)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 _VALID_DIRS = frozenset({"up", "down", "lan"})
 
@@ -48,7 +48,7 @@ def parse_excluded_hosts(value: Any) -> list[str]:
             return []
         return [item.strip() for item in stripped.split(",") if item.strip()]
     if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [str(item).strip() for item in value if item is not None and str(item).strip()]
     return list(DEFAULT_EXCLUDED_HOSTS)
 
 
@@ -92,7 +92,7 @@ def clamp_limit(limit: int, min_val: int = 1, max_val: int = 100) -> int:
     """Clamp integer limit to [min_val, max_val]."""
     try:
         val = int(limit)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"Invalid limit {limit!r}: must be an integer") from exc
     return max(min_val, min(max_val, val))
 
@@ -195,33 +195,42 @@ def load_config(
         loki_sec = data.get("loki") if isinstance(data.get("loki"), dict) else {}
         kube_sec = data.get("kube") if isinstance(data.get("kube"), dict) else {}
 
-        if "loki_url" in data or "url" in loki_sec:
-            cfg.loki_url = str(data.get("loki_url", loki_sec.get("url", cfg.loki_url))).rstrip("/")
-        if "job" in data:
+        raw_url = data.get("loki_url") if data.get("loki_url") is not None else loki_sec.get("url")
+        if raw_url is not None:
+            cfg.loki_url = str(raw_url).rstrip("/")
+        if data.get("job") is not None:
             cfg.job = str(data["job"])
-        if "tls_verify" in data or "tlsVerify" in loki_sec:
-            cfg.tls_verify = parse_tls_verify(data.get("tls_verify", loki_sec.get("tlsVerify")))
-        if "loki_token" in data or "bearerToken" in loki_sec:
-            cfg.loki_token = str(data.get("loki_token", loki_sec.get("bearerToken", "")) or "")
-        if "loki_user" in data or "username" in loki_sec:
-            cfg.loki_user = str(data.get("loki_user", loki_sec.get("username", "")) or "")
-        if "loki_password" in data or "password" in loki_sec:
-            cfg.loki_password = str(data.get("loki_password", loki_sec.get("password", "")) or "")
-        if "loki_tenant_id" in data or "tenantId" in loki_sec:
-            cfg.loki_tenant_id = str(data.get("loki_tenant_id", loki_sec.get("tenantId", "")) or "")
+        raw_tls = data.get("tls_verify") if "tls_verify" in data else loki_sec.get("tlsVerify")
+        if raw_tls is not None:
+            cfg.tls_verify = parse_tls_verify(raw_tls)
+        raw_tok = data.get("loki_token") if data.get("loki_token") is not None else loki_sec.get("bearerToken")
+        if raw_tok is not None:
+            cfg.loki_token = str(raw_tok)
+        raw_usr = data.get("loki_user") if data.get("loki_user") is not None else loki_sec.get("username")
+        if raw_usr is not None:
+            cfg.loki_user = str(raw_usr)
+        raw_pwd = data.get("loki_password") if data.get("loki_password") is not None else loki_sec.get("password")
+        if raw_pwd is not None:
+            cfg.loki_password = str(raw_pwd)
+        raw_tid = data.get("loki_tenant_id") if data.get("loki_tenant_id") is not None else loki_sec.get("tenantId")
+        if raw_tid is not None:
+            cfg.loki_tenant_id = str(raw_tid)
         if "excluded_hosts" in data or "excludedHosts" in data:
             raw_excl = data.get("excluded_hosts", data.get("excludedHosts"))
             cfg.excluded_hosts = parse_excluded_hosts(raw_excl)
-        if "kube_context" in data or "context" in kube_sec:
-            cfg.kube_context = str(data.get("kube_context", kube_sec.get("context", "")) or "")
-        if "kube_namespace" in data or "namespace" in kube_sec:
-            cfg.kube_namespace = str(data.get("kube_namespace", kube_sec.get("namespace", cfg.kube_namespace)) or cfg.kube_namespace)
-        if "kube_target" in data or "target" in kube_sec:
-            cfg.kube_target = str(data.get("kube_target", kube_sec.get("target", cfg.kube_target)) or cfg.kube_target)
-        if "cluster_loki_url" in data:
+        raw_kctx = data.get("kube_context") if data.get("kube_context") is not None else kube_sec.get("context")
+        if raw_kctx is not None:
+            cfg.kube_context = str(raw_kctx)
+        raw_kns = data.get("kube_namespace") if data.get("kube_namespace") is not None else kube_sec.get("namespace")
+        if raw_kns is not None:
+            cfg.kube_namespace = str(raw_kns) or cfg.kube_namespace
+        raw_ktgt = data.get("kube_target") if data.get("kube_target") is not None else kube_sec.get("target")
+        if raw_ktgt is not None:
+            cfg.kube_target = str(raw_ktgt) or cfg.kube_target
+        if data.get("cluster_loki_url") is not None:
             cfg.cluster_loki_url = str(data["cluster_loki_url"]).rstrip("/")
-        if "timeout_seconds" in data:
-            cfg.timeout_seconds = float(data["timeout_seconds"])
+        if data.get("timeout_seconds") is not None:
+            cfg.timeout_seconds = max(0.1, float(data["timeout_seconds"]))
 
     # Environment overrides
     if "NXTFLOW_LOKI_URL" in os.environ and os.environ["NXTFLOW_LOKI_URL"].strip():

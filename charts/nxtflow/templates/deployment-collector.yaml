@@ -54,12 +54,16 @@ spec:
           image: "{{ .Values.collector.goflow2.image.repository }}:{{ .Values.collector.goflow2.image.tag }}"
           imagePullPolicy: {{ .Values.collector.goflow2.image.pullPolicy }}
           args:
-            - "-listen={{ .Values.collector.goflow2.listen }}"
+            {{- $gfListen := .Values.collector.goflow2.listen }}
+            {{- if or (empty $gfListen) (eq $gfListen "sflow://:6343,netflow://:2055") }}
+            {{- $gfListen = printf "sflow://:%d,netflow://:%d" (int .Values.collector.service.sflowPort) (int .Values.collector.service.netflowPort) }}
+            {{- end }}
+            - "-listen={{ $gfListen }}"
             - "-format={{ .Values.collector.goflow2.format }}"
             - "-addr=:{{ .Values.collector.metricsService.goflow2Port }}"
             {{- if eq .Values.collector.goflow2.transport "http" }}
             - "-transport=http"
-            - "-transport.http.destination=http://127.0.0.1:8081/ingest"
+            - "-transport.http.destination=http://127.0.0.1:{{ include "nxtflow.enricherHttpPort" . }}/ingest"
             {{- else }}
             - "-transport=file"
             - "-transport.file={{ .Values.enricher.ingest.file.path }}"
@@ -103,7 +107,7 @@ spec:
             {{- toYaml .Values.collector.goflow2.resources | nindent 12 }}
 
         - name: enricher
-          image: "{{ .Values.enricher.image.repository }}:{{ .Values.enricher.image.tag }}"
+          image: "{{ .Values.enricher.image.repository }}:{{ .Values.enricher.image.tag | default (printf "v%s" (trimPrefix "v" .Chart.AppVersion)) }}"
           imagePullPolicy: {{ .Values.enricher.image.pullPolicy }}
           args:
             - "--config"
@@ -149,11 +153,11 @@ spec:
           ports:
             {{- if .Values.enricher.ingest.http.enabled }}
             - name: http-ingest
-              containerPort: 8081
+              containerPort: {{ include "nxtflow.enricherHttpPort" . }}
               protocol: TCP
             {{- end }}
             - name: metrics
-              containerPort: {{ .Values.collector.metricsService.enricherPort }}
+              containerPort: {{ include "nxtflow.enricherMetricsPort" . }}
               protocol: TCP
           {{- if .Values.enricher.ingest.http.enabled }}
           livenessProbe:
@@ -197,7 +201,7 @@ spec:
               mountPath: /var/log/nxtflow
             {{- if .Values.externalLoki.tls.existingCaConfigMap }}
             - name: external-loki-ca
-              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              mountPath: {{ dir (include "nxtflow.externalLokiCaFile" .) | quote }}
               readOnly: true
             {{- end }}
             {{- with .Values.collector.extraVolumeMounts }}
@@ -255,7 +259,7 @@ spec:
               readOnly: true
             {{- if .Values.externalLoki.tls.existingCaConfigMap }}
             - name: external-loki-ca
-              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              mountPath: {{ dir (include "nxtflow.externalLokiCaFile" .) | quote }}
               readOnly: true
             {{- end }}
             {{- with .Values.collector.extraVolumeMounts }}

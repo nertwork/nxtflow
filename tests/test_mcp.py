@@ -121,3 +121,35 @@ def test_mcp_30d_summary_and_non_dict_error() -> None:
         assert res["window"]["range"] == "30d"
         err = asyncio.run(call_tool("nxtflow_status", {"range_str": "5m"}))
         assert "non-object JSON" in err["error"]
+
+
+def test_tier5_mcp_bad_tls_returns_error_json_and_empty_port_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NXTFLOW_MCP_PORT", "")
+    args = parse_args([])
+    assert args.port == 8000
+
+    bad_cfg = NxtflowConfig(tls_verify=str(tmp_path / "missing-ca.pem"))
+    mcp = create_server(config=bad_cfg)
+
+    async def _invoke_all() -> None:
+        calls = [
+            ("nxtflow_status", {}),
+            ("nxtflow_summary", {}),
+            ("nxtflow_top_sources", {}),
+            ("nxtflow_top_destinations", {}),
+            ("nxtflow_top_connections", {}),
+            ("nxtflow_top_ports", {}),
+            ("nxtflow_host_profile", {"host": "web-1"}),
+            ("nxtflow_sessions", {"host": "web-1"}),
+            ("nxtflow_search", {"term": "web-1"}),
+            ("nxtflow_directory", {}),
+        ]
+        for tool_name, params in calls:
+            res = await mcp.call_tool(tool_name, params)
+            blocks = res[0] if isinstance(res, tuple) else res
+            text = blocks[0].text
+            payload = json.loads(text)
+            assert "error" in payload, f"Expected error JSON for {tool_name}, got {payload}"
+            assert "Invalid TLS configuration" in payload["error"]
+
+    asyncio.run(_invoke_all())

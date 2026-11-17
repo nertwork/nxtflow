@@ -428,3 +428,148 @@ def test_sync_gh_pages_rewrites_relative_examples_links(tmp_path: Path) -> None:
     rewritten = mod.rewrite_links(exporters_md)
     assert "../" not in rewritten
     assert "https://github.com/nertwork/nxtflow/blob/main/examples/exporters/mikrotik-routeros.rsc" in rewritten
+
+
+def test_tier5_helm_subchart_names_ingress_ca_dashboard_ports_and_tags() -> None:
+    helm_bin = _require_helm()
+
+    # H1: Release names containing loki, prometheus, grafana match subchart service naming
+    for rel, expected_loki, expected_prom, expected_graf in (
+        ("loki", "http://loki:3100", "http://loki-prometheus-server:80", "svc/loki-grafana"),
+        ("prometheus", "http://prometheus-loki:3100", "http://prometheus-server:80", "svc/prometheus-grafana"),
+        ("grafana", "http://grafana-loki:3100", "http://grafana-prometheus-server:80", "svc/grafana"),
+    ):
+        docs = _render_chart(rel, "--set", "tags.standalone=true")
+        ds_cm = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-grafana-datasources"))
+        ds_cfg = yaml.safe_load(ds_cm["data"]["nxtflow-datasources.yaml"])
+        by_name = {d["name"]: d for d in ds_cfg["datasources"]}
+        assert by_name["Loki"]["url"] == expected_loki
+        assert by_name["Prometheus"]["url"] == expected_prom
+        enr_cm = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"].endswith("-enricher"))
+        assert yaml.safe_load(enr_cm["data"]["enricher.yaml"])["shipper"]["loki"]["url"] == expected_loki
+        svc_names = {d["metadata"]["name"] for d in docs if d.get("kind") == "Service"}
+        assert expected_loki.removeprefix("http://").split(":", 1)[0] in svc_names
+        assert expected_prom.removeprefix("http://").split(":", 1)[0] in svc_names
+        assert expected_graf.removeprefix("svc/") in svc_names
+        notes_tpl = (CHART_DIR / "templates" / "NOTES.txt").read_text(encoding="utf-8")
+        assert 'include "nxtflow.bundledGrafanaService"' in notes_tpl
+        assert 'include "nxtflow.bundledLokiService"' in notes_tpl
+
+    # H3: mcp.ingress.enabled=true requires non-empty hosts and paths
+    for bad_args in (
+        ["--set", "mcp.enabled=true", "--set", "mcp.ingress.enabled=true"],
+        ["--set", "mcp.enabled=true", "--set", "mcp.ingress.enabled=true", "--set", "mcp.ingress.hosts[0].host=mcp.example.com"],
+    ):
+        res = subprocess.run([helm_bin, "template", "bad", str(CHART_DIR), *bad_args], capture_output=True, text=True, check=False)
+        assert res.returncode != 0
+    ok_ing = _render_chart(
+        "ok",
+        "--set", "mcp.enabled=true",
+        "--set", "mcp.ingress.enabled=true",
+        "--set", "mcp.ingress.hosts[0].host=mcp.example.com",
+        "--set", "mcp.ingress.hosts[0].paths[0].path=/",
+        "--set", "mcp.ingress.hosts[0].paths[0].pathType=Prefix",
+    )
+    assert any(d.get("kind") == "Ingress" for d in ok_ing)
+
+    # H4: existingCaConfigMap without explicit caFile defaults to /etc/nxtflow/ca/ca.crt across all templates
+    ca_docs = _render_chart(
+        "rel",
+        "--set", "tags.standalone=false",
+        "--set", "externalLoki.url=https://loki.example.com",
+        "--set", "externalLoki.tls.existingCaConfigMap=corp-ca",
+        "--set", "enricher.shipper.mode=alloy",
+    )
+    enr_yaml = yaml.safe_load(
+        next(d for d in ca_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-enricher")["data"]["enricher.yaml"]
+    )
+    assert enr_yaml["shipper"]["loki"]["caFile"] == "/etc/nxtflow/ca/ca.crt"
+    alloy_txt = next(d for d in ca_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-alloy")["data"]["config.alloy"]
+    assert 'ca_file = "/etc/nxtflow/ca/ca.crt"' in alloy_txt
+    mcp_dep = next(d for d in ca_docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rel-nxtflow-mcp")
+    mcp_env = {e["name"]: e.get("value") for e in mcp_dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert mcp_env["NXTFLOW_TLS_VERIFY"] == "/etc/nxtflow/ca/ca.crt"
+
+    # M1: Dashboard JSON escaping with quotes/backslashes, <fullname>-metrics selector, Prometheus UID guard
+    for engine in ("echarts", "netsage"):
+        m1_docs = _render_chart(
+            "rel",
+            "--set", "tags.standalone=true",
+            "--set", "bundled.prometheus.enabled=false",
+            "--set", f"grafana.sankey.engine={engine}",
+            "--set", r'collector.job=bad"job	est',
+            "--set", r'enricher.classification.excludedHosts={a"b,c\d}',
+        )
+        dash_cm = next(d for d in m1_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-dashboard")
+        parsed_dash = json.loads(dash_cm["data"]["nxtflow-overview.json"])
+        col_panel = next(p for p in parsed_dash["panels"] if p.get("title") == "Collector")
+        assert col_panel["targets"][0]["expr"] == 'max(up{service=~"rel-nxtflow-metrics"})'
+        # Prometheus disabled + no externalPrometheusUrl -> ${DS_PROMETHEUS} preserved
+        assert col_panel["datasource"]["uid"] == "${DS_PROMETHEUS}"
+
+    # M2: Custom NetFlow/sFlow/Enricher ports propagate across Service, Deployment, ConfigMap
+    m2_docs = _render_chart(
+        "rel",
+        "--set", "collector.goflow2.transport=http",
+        "--set", "collector.service.netflowPort=9995",
+        "--set", "collector.service.sflowPort=6344",
+        "--set", "collector.metricsService.enricherPort=9191",
+        "--set", "enricher.ingest.http.listenAddr=0.0.0.0:8091",
+    )
+    col_dep = next(d for d in m2_docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rel-nxtflow-collector")
+    containers = {c["name"]: c for c in col_dep["spec"]["template"]["spec"]["containers"]}
+    assert "-listen=sflow://:6344,netflow://:9995" in containers["goflow2"]["args"]
+    assert "-transport.http.destination=http://127.0.0.1:8091/ingest" in containers["goflow2"]["args"]
+    enr_ports = {p["name"]: p["containerPort"] for p in containers["enricher"]["ports"]}
+    assert enr_ports == {"http-ingest": 8091, "metrics": 9191}
+    m2_enr = yaml.safe_load(
+        next(d for d in m2_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-enricher")["data"]["enricher.yaml"]
+    )
+    assert m2_enr["metrics"]["listenAddr"] == "0.0.0.0:9191"
+
+    # M4: Image tags default to v<Chart.AppVersion> when empty in values.yaml
+    chart_meta = yaml.safe_load((CHART_DIR / "Chart.yaml").read_text(encoding="utf-8"))
+    expected_tag = f"v{chart_meta['appVersion']}"
+    default_docs = _render_chart("rel")
+    d_col = next(d for d in default_docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rel-nxtflow-collector")
+    d_mcp = next(d for d in default_docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rel-nxtflow-mcp")
+    d_enr_img = next(c["image"] for c in d_col["spec"]["template"]["spec"]["containers"] if c["name"] == "enricher")
+    assert d_enr_img.endswith(f":{expected_tag}")
+    assert d_mcp["spec"]["template"]["spec"]["containers"][0]["image"].endswith(f":{expected_tag}")
+
+
+def test_tier5_zero_pii_patterns_and_sync_gh_pages_anchors(tmp_path: Path) -> None:
+    spec_pii = importlib.util.spec_from_file_location("zero_pii_audit", REPO_ROOT / "scripts" / "zero_pii_audit.py")
+    assert spec_pii is not None and spec_pii.loader is not None
+    mod_pii = importlib.util.module_from_spec(spec_pii)
+    spec_pii.loader.exec_module(mod_pii)
+
+    dirty_dir = tmp_path / "dirty"
+    dirty_dir.mkdir()
+    sample = "\n".join(
+        [
+            "github_" + "pat_" + "A" * 24,
+            "xox" + "b-" + "1234567890-abcdef",
+            "hv" + "s." + "A1B2C3D4E5F6G7H8I9J0K1",
+        ]
+    )
+    (dirty_dir / "leak.txt").write_text(sample, encoding="utf-8")
+    hits = mod_pii.scan_directory(dirty_dir)
+    assert len(hits) == 3
+
+    spec_gh = importlib.util.spec_from_file_location("sync_gh_pages", REPO_ROOT / ".github" / "scripts" / "sync_gh_pages.py")
+    assert spec_gh is not None and spec_gh.loader is not None
+    mod_gh = importlib.util.module_from_spec(spec_gh)
+    spec_gh.loader.exec_module(mod_gh)
+
+    md = (
+        "[Arch](architecture.md#loki) "
+        "[DocsArch](docs/architecture.md#sankey) "
+        "[Values](../charts/nxtflow/values.yaml) "
+        "[Logo](../assets/logo.svg)"
+    )
+    out = mod_gh.rewrite_links(md)
+    assert "(architecture.html#loki)" in out
+    assert "(architecture.html#sankey)" in out
+    assert "(https://github.com/nertwork/nxtflow/blob/main/charts/nxtflow/values.yaml)" in out
+    assert "(../assets/logo.svg)" in out

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import html
+import re
 import shutil
 import sys
 import tomllib
@@ -152,13 +153,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 def rewrite_links(md_text: str) -> str:
-    """Rewrite relative docs/ and ../examples/ links for the static _site output."""
+    """Rewrite relative docs/ and ../ links (including #anchors) for the static _site output."""
     for md_src, html_dst, _ in PAGES:
         md_name = Path(md_src).name
-        md_text = md_text.replace(f"({md_name})", f"({html_dst})")
-    return md_text.replace(
-        "(../examples/",
-        "(https://github.com/nertwork/nxtflow/blob/main/examples/",
+        md_text = re.sub(
+            rf"\((?:\.\./|docs/)?{re.escape(md_name)}(#[^)]*)?\)",
+            lambda m, dst=html_dst: f"({dst}{m.group(1) or ''})",
+            md_text,
+        )
+    return re.sub(
+        r"\(\.\./(?!assets/)([^)]+)\)",
+        r"(https://github.com/nertwork/nxtflow/blob/main/\1)",
+        md_text,
     )
 
 

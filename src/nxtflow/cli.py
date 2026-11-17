@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import yaml
 
 from nxtflow.config import load_config, validate_dir, validate_range
-from nxtflow.loki import LokiClient, LokiError
+from nxtflow.loki import LokiClient, LokiError, _safe_int
 
 
 def fmt_bytes(b: float) -> str:
@@ -105,10 +105,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _resolve_limit(args: argparse.Namespace, default: int) -> int:
     if getattr(args, "limit", None) is not None:
-        return int(args.limit)
+        return max(1, int(args.limit))
     if getattr(args, "count", None) is not None:
-        return int(args.count)
-    return default
+        return max(1, int(args.count))
+    return max(1, default)
 
 
 def _render_status(st: dict, as_json: bool) -> None:
@@ -233,7 +233,7 @@ def _render_search(term: str, total: int, rows: list[dict], range_str: str, as_j
         raw_port = line.get("dst_port")
         port = "?" if raw_port is None or raw_port == "" else str(raw_port)
         proto = str(line.get("proto") or "?")
-        b = fmt_bytes(int(line.get("bytes") or 0))
+        b = fmt_bytes(_safe_int(line.get("bytes"), 0))
         print(f"  [{site:5s}] {src:22s} -> {dst:22s} :{port:<6} {proto:4s} {b}")
 
 
@@ -278,8 +278,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"  {k:18s}: {v}")
         return 0
 
-    client = LokiClient(cfg)
     try:
+        client = LokiClient(cfg)
         if cmd in ("status", "health"):
             _render_status(client.get_status_data(range_str=range_str), as_json)
         elif cmd in ("summary", "traffic"):
@@ -319,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             n = _resolve_limit(args, 500)
             mapping = client.get_directory_data(range_str=range_str, site_val=args.site_val, limit=n)
             _render_directory(mapping, range_str, as_json)
-    except (LokiError, ValueError) as exc:
+    except (LokiError, ValueError, OSError) as exc:
         if as_json:
             print(json.dumps({"error": str(exc)}), file=sys.stderr)
         else:

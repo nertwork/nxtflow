@@ -78,6 +78,9 @@ def _build_patterns() -> list[tuple[str, re.Pattern[str]]]:
         ("secret-ghp", r"\bghp" + r"_[A-Za-z0-9]{20,}\b"),
         ("secret-glpat", r"\bglpat" + r"-[A-Za-z0-9_-]{20,}\b"),
         ("secret-aws-akia", r"\bAKIA" + r"[0-9A-Z]{16}\b"),
+        ("secret-github-pat", r"\bgithub_pat" + r"_[A-Za-z0-9_]{20,}\b"),
+        ("secret-slack-token", r"\bxox[bpa]" + r"-[A-Za-z0-9-]{10,}\b"),
+        ("secret-vault-token", r"\bhvs" + r"\.[A-Za-z0-9_-]{20,}\b"),
     ]
     return [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in raw_specs]
 

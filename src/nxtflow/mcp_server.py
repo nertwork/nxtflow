@@ -38,7 +38,7 @@ def create_server(
         try:
             valid_range = validate_range(range_str)
             return json.dumps(_client().get_status_data(range_str=valid_range), indent=2)
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -55,7 +55,7 @@ def create_server(
                 _client().get_summary_data(range_str=valid_range, dir_val=valid_dir, site_val=site),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -80,7 +80,7 @@ def create_server(
                 ),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -105,7 +105,7 @@ def create_server(
                 ),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -129,7 +129,7 @@ def create_server(
                 ),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -153,7 +153,7 @@ def create_server(
                 ),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -167,7 +167,7 @@ def create_server(
             valid_range = validate_range(range_str)
             data = _client().get_host_data(name=host, range_str=valid_range, site_val=site)
             return json.dumps(data or {"host": host, "flows": 0}, indent=2)
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -185,7 +185,7 @@ def create_server(
                 _client().get_sessions_data(name=host, range_str=valid_range, site_val=site, limit=bounded_limit),
                 indent=2,
             )
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -206,7 +206,7 @@ def create_server(
                 site_val=site,
             )
             return json.dumps({"term": term, "total_sampled": total, "flows": rows}, indent=2)
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     @mcp.tool()
@@ -218,7 +218,7 @@ def create_server(
         try:
             valid_range = validate_range(range_str)
             return json.dumps(_client().get_directory_data(range_str=valid_range, site_val=site), indent=2)
-        except (ValueError, TypeError, LokiError) as exc:
+        except (ValueError, TypeError, LokiError, OSError) as exc:
             return json.dumps({"error": str(exc)}, indent=2)
 
     return mcp
@@ -227,7 +227,7 @@ def create_server(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     env_transport = os.environ.get("NXTFLOW_MCP_TRANSPORT", "stdio").strip() or "stdio"
     env_host = os.environ.get("NXTFLOW_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    env_port = int(os.environ.get("NXTFLOW_MCP_PORT", "8000"))
+    env_port = int(os.environ.get("NXTFLOW_MCP_PORT", "").strip() or "8000")
     env_stateless = os.environ.get("NXTFLOW_MCP_STATELESS_HTTP", "").strip().lower() in ("1", "true", "yes")
 
     parser = argparse.ArgumentParser(prog="nxtflow-mcp", description="nxtflow read-only FastMCP server")

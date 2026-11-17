@@ -61,7 +61,7 @@ data:
         type: prometheus
         uid: prometheus
         access: proxy
-        url: http://{{ .Release.Name }}-prometheus-server:80
+        url: http://{{ include "nxtflow.bundledPrometheusService" . }}:80
         isDefault: true
         editable: true
       {{- else if .Values.grafana.externalPrometheusUrl }}

@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag | default (printf "v%s" (trimPrefix "v" .Chart.AppVersion)) }}"
           imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
           args:
             - "--transport"
@@ -39,11 +39,12 @@ spec:
               value: {{ include "nxtflow.lokiUrl" . | quote }}
             - name: NXTFLOW_JOB
               value: {{ .Values.collector.job | quote }}
+            {{- $caFile := include "nxtflow.externalLokiCaFile" . }}
             - name: NXTFLOW_TLS_VERIFY
               {{- if .Values.externalLoki.tls.insecureSkipVerify }}
               value: "false"
-              {{- else if .Values.externalLoki.tls.caFile }}
-              value: {{ .Values.externalLoki.tls.caFile | quote }}
+              {{- else if $caFile }}
+              value: {{ $caFile | quote }}
               {{- else }}
               value: "true"
               {{- end }}
@@ -104,7 +105,7 @@ spec:
           volumeMounts:
             {{- if .Values.externalLoki.tls.existingCaConfigMap }}
             - name: external-loki-ca
-              mountPath: {{ dir (default "/etc/nxtflow/ca/ca.crt" .Values.externalLoki.tls.caFile) | quote }}
+              mountPath: {{ dir (include "nxtflow.externalLokiCaFile" .) | quote }}
               readOnly: true
             {{- end }}
             {{- with .Values.mcp.extraVolumeMounts }}

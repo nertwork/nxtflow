@@ -485,3 +485,274 @@ def test_loki_client_handles_null_data_result_stream_and_values(
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_tier5_cli_tls_nan_kubectl_guard_null_yaml_and_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from nxtflow.config import NxtflowConfig, clamp_limit, parse_excluded_hosts, parse_tls_verify
+
+    # Gap 4: invalid CA path -> LokiError (not raw FileNotFoundError) & CLI exit 1
+    with pytest.raises(LokiError, match="Invalid TLS configuration"):
+        LokiClient(NxtflowConfig(tls_verify=str(tmp_path / "missing-ca.pem")))
+    monkeypatch.setenv("NXTFLOW_TLS_VERIFY", str(tmp_path / "missing-ca.pem"))
+    assert main(["status", "--json"]) == 1
+    assert "Invalid TLS configuration" in capsys.readouterr().err
+    monkeypatch.delenv("NXTFLOW_TLS_VERIFY")
+
+    # Gap 5: YAML null values do not turn into "None"
+    null_yaml = tmp_path / "null_cli.yaml"
+    null_yaml.write_text(
+        """
+loki_url: null
+job: null
+tls_verify: null
+loki_token: null
+loki_user: null
+loki_password: null
+loki_tenant_id: null
+excluded_hosts: [null, "multicast"]
+kube_context: null
+kube_namespace: null
+kube_target: null
+cluster_loki_url: null
+timeout_seconds: null
+""",
+        encoding="utf-8",
+    )
+    cfg_null = load_config(config_file=null_yaml)
+    assert cfg_null.loki_url == "http://localhost:3100"
+    assert cfg_null.job == "nxtflow"
+    assert cfg_null.excluded_hosts == ["multicast"]
+    assert cfg_null.kube_namespace == "nxtflow"
+    assert parse_excluded_hosts(None) == ["multicast", "link-local"]
+    assert parse_excluded_hosts([None, "keep"]) == ["keep"]
+    assert parse_excluded_hosts("a, , b") == ["a", "b"]
+    assert parse_tls_verify("true") is True
+    assert parse_tls_verify("false") is False
+    assert parse_tls_verify(None) is True
+
+    # Gap 11: use_kubectl=True without kube_context immediately raises LokiError
+    with pytest.raises(LokiError, match="kube_context is not configured"):
+        LokiClient(NxtflowConfig(use_kubectl=True, kube_context="")).request("/loki/api/v1/label/site/values")
+
+    # Gap 15: overflow & Unicode digits & negative limit clamping
+    with pytest.raises(ValueError, match="integer"):
+        clamp_limit(float("inf"))
+    with pytest.raises(ValueError, match="Invalid range"):
+        validate_range("٥m")
+    assert main([]) == 0
+    capsys.readouterr()
+
+    # Gap 6: non-finite NaN/Inf in Loki responses + non-UTF-8 + unhashable dst_port
+    mode = ["nan_metrics"]
+
+    class WeirdLokiHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def do_GET(self) -> None:
+            parsed = urllib.parse.urlparse(self.path)
+            if mode[0] == "bad_utf8":
+                body = b"\xff\xfe\xfd"
+            elif parsed.path == "/loki/api/v1/query":
+                body = json.dumps(
+                    {
+                        "status": "success",
+                        "data": {
+                            "result": [
+                                {"metric": {"src_host": "a"}, "value": [1, "NaN"]},
+                                {"metric": {"src_host": "b"}, "value": [1, "Infinity"]},
+                                {"metric": {"src_host": "c"}, "value": [1, "500"]},
+                            ]
+                        },
+                    }
+                ).encode("utf-8")
+            elif "rate(" in self.path:
+                body = json.dumps(
+                    {
+                        "status": "success",
+                        "data": {
+                            "result": [{"values": [[100, "NaN"], [101, "Infinity"], [102, "bad"], [103, "64.0"]]}]
+                        },
+                    }
+                ).encode("utf-8")
+            else:
+                flow = json.dumps(
+                    {
+                        "site": None,
+                        "dir": None,
+                        "src_host": "web-1",
+                        "dst_host": "dns",
+                        "src_addr": "10.0.0.1",
+                        "dst_addr": "1.1.1.1",
+                        "dst_port": {"nested": 53},
+                        "proto": "UDP",
+                        "bytes": "NaN",
+                    }
+                )
+                body = json.dumps(
+                    {"status": "success", "data": {"result": [{"stream": {}, "values": [["1", flow]]}]}}
+                ).encode("utf-8")
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), WeirdLokiHandler)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    try:
+        monkeypatch.setenv("NXTFLOW_LOKI_URL", f"http://127.0.0.1:{srv.server_address[1]}")
+        assert main(["summary", "--json"]) == 0
+        summary_out = capsys.readouterr().out
+        json.loads(summary_out, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+
+        assert main(["top-src", "--limit", "-5"]) == 0
+        top_out = capsys.readouterr().out
+        assert "1 max)" in top_out
+        assert "Top -5" not in top_out
+
+        assert main(["host", "web-1", "--json"]) == 0
+        host_json = json.loads(capsys.readouterr().out)
+        assert host_json["bytes"] == 0
+        assert host_json["top_ports"][0]["port"] == "{'nested': 53}"
+
+        assert main(["sessions", "web-1", "--json"]) == 0
+        assert json.loads(capsys.readouterr().out)[0]["bytes"] == 0
+        assert main(["search", "web-1"]) == 0
+        capsys.readouterr()
+
+        mode[0] = "bad_utf8"
+        assert main(["status", "--json"]) == 1
+        assert "Loki request failed" in capsys.readouterr().err
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_tier5_config_env_overrides_and_kubectl_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    from unittest.mock import MagicMock, patch
+
+    from nxtflow.config import NxtflowConfig
+
+    monkeypatch.setenv("NXTFLOW_LOKI_URL", "https://loki.example.com/")
+    monkeypatch.setenv("NXTFLOW_JOB", "envjob")
+    monkeypatch.setenv("NXTFLOW_LOKI_TOKEN", "tok")
+    monkeypatch.setenv("NXTFLOW_LOKI_USER", "usr")
+    monkeypatch.setenv("NXTFLOW_LOKI_PASSWORD", "pwd")
+    monkeypatch.setenv("NXTFLOW_LOKI_TENANT_ID", "tid")
+    monkeypatch.setenv("NXTFLOW_TLS_VERIFY", "false")
+    monkeypatch.setenv("NXTFLOW_USE_KUBECTL", "1")
+    monkeypatch.setenv("NXTFLOW_KUBE_CONTEXT", "home1")
+    monkeypatch.setenv("NXTFLOW_KUBE_NAMESPACE", "netflow")
+    monkeypatch.setenv("NXTFLOW_KUBE_TARGET", "deploy/goflow2")
+    monkeypatch.setenv("NXTFLOW_CLUSTER_LOKI_URL", "http://loki.ns:3100/")
+    monkeypatch.setenv("NXTFLOW_EXCLUDED_HOSTS", "h1,h2")
+    cfg = load_config(timeout_seconds=9.5)
+    assert cfg.loki_url == "https://loki.example.com"
+    assert cfg.job == "envjob"
+    assert cfg.loki_token == "tok"
+    assert cfg.loki_user == "usr"
+    assert cfg.loki_password == "pwd"
+    assert cfg.loki_tenant_id == "tid"
+    assert cfg.tls_verify is False
+    assert cfg.use_kubectl is True
+    assert cfg.kube_context == "home1"
+    assert cfg.kube_namespace == "netflow"
+    assert cfg.kube_target == "deploy/goflow2"
+    assert cfg.cluster_loki_url == "http://loki.ns:3100"
+    assert cfg.excluded_hosts == ["h1", "h2"]
+    assert cfg.timeout_seconds == 9.5
+    assert cfg.redacted_dict()["loki_token"] == "***"
+
+    client = LokiClient(NxtflowConfig(use_kubectl=True, kube_context="home1"))
+    with (
+        patch("nxtflow.loki.subprocess.run", side_effect=subprocess.TimeoutExpired("kubectl", 1)),
+        pytest.raises(LokiError, match="timed out"),
+    ):
+        client.request("/loki/api/v1/label/site/values")
+    with (
+        patch("nxtflow.loki.subprocess.run", return_value=MagicMock(returncode=1, stderr="boom", stdout="")),
+        pytest.raises(LokiError, match="boom"),
+    ):
+        client.request("/loki/api/v1/label/site/values")
+    with (
+        patch("nxtflow.loki.subprocess.run", return_value=MagicMock(returncode=0, stderr="", stdout="not-json")),
+        pytest.raises(LokiError, match="Invalid JSON"),
+    ):
+        client.request("/loki/api/v1/label/site/values")
+    with (
+        patch("nxtflow.loki.subprocess.run", return_value=MagicMock(returncode=0, stderr="", stdout='{"status":"error","error":"bad query"}')),
+        pytest.raises(LokiError, match="bad query"),
+    ):
+        client.request("/loki/api/v1/label/site/values")
+
+
+def test_tier5_config_nested_yaml_and_validation_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from nxtflow.config import (
+        load_config,
+        parse_excluded_hosts,
+        sanitize_logql_regex,
+        validate_dir,
+        validate_range,
+    )
+
+    nested = tmp_path / "nested.yaml"
+    nested.write_text(
+        """
+loki:
+  url: https://nested-loki.example.com/
+  tlsVerify: false
+  bearerToken: nest-tok
+  username: nest-usr
+  password: nest-pwd
+  tenantId: nest-tid
+kube:
+  context: dhc1
+  namespace: netflow-ns
+  target: deploy/custom
+excludedHosts:
+  - multicast
+timeout_seconds: 0.01
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("NXTFLOW_CONFIG_FILE", raising=False)
+    cfg = load_config(config_file=nested)
+    assert cfg.loki_url == "https://nested-loki.example.com"
+    assert cfg.tls_verify is False
+    assert cfg.loki_token == "nest-tok"
+    assert cfg.loki_user == "nest-usr"
+    assert cfg.loki_password == "nest-pwd"
+    assert cfg.loki_tenant_id == "nest-tid"
+    assert cfg.kube_context == "dhc1"
+    assert cfg.kube_namespace == "netflow-ns"
+    assert cfg.kube_target == "deploy/custom"
+    assert cfg.excluded_hosts == ["multicast"]
+    assert cfg.timeout_seconds == 0.1
+
+    monkeypatch.setenv("NXTFLOW_LOKI_USERNAME", "alias-usr")
+    assert load_config(config_file=nested).loki_user == "alias-usr"
+
+    bad_type = tmp_path / "list.yaml"
+    bad_type.write_text("- item1\n", encoding="utf-8")
+    with pytest.raises(TypeError, match="YAML mapping"):
+        load_config(config_file=bad_type)
+
+    empty_yaml = tmp_path / "empty.yaml"
+    empty_yaml.write_text("", encoding="utf-8")
+    assert load_config(config_file=empty_yaml).loki_url == "http://localhost:3100"
+
+    assert parse_excluded_hosts("") == []
+    assert parse_excluded_hosts(123) == ["multicast", "link-local"]
+    assert validate_dir("   ") is None
+    with pytest.raises(TypeError, match="expected string"):
+        validate_range(123)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="cannot be empty"):
+        sanitize_logql_regex("   ` ")

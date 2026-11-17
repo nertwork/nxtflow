@@ -68,7 +68,7 @@ collector:
 enricher:
   image:
     repository: ghcr.io/nertwork/nxtflow-enricher
-    tag: v0.1.0
+    tag: ""  # Defaults to v<Chart.AppVersion> when empty
     pullPolicy: IfNotPresent
 
   logLevel: "INFO"
@@ -166,7 +166,7 @@ mcp:
   replicaCount: 1
   image:
     repository: ghcr.io/nertwork/nxtflow-mcp
-    tag: v0.1.0
+    tag: ""  # Defaults to v<Chart.AppVersion> when empty
     pullPolicy: IfNotPresent
   transport: "streamable-http"
   port: 8000

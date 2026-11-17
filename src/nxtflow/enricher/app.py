@@ -9,6 +9,7 @@ import http.client
 import ipaddress
 import json
 import logging
+import math
 import os
 import signal
 import socket
@@ -27,7 +28,7 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, NoReturn, TextIO
 
 import yaml
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
@@ -43,13 +44,61 @@ from nxtflow.enricher.default_cidrs import (
 LOGGER = logging.getLogger("nxtflow.enricher")
 
 
+_DEFAULT_MAX_DECOMPRESSED_BYTES = 64 * 1024 * 1024
+_MAX_CHUNK_TRAILER_LINES = 64
+_MAX_CHUNK_TRAILER_BYTES = 65536
+
+
+class PayloadTooLargeError(ValueError):
+    """Raised when compressed or decompressed ingest payload exceeds configured limits."""
+
+
+def _reject_non_finite(token: str) -> NoReturn:
+    raise ValueError(f"Non-finite JSON constant not allowed: {token}")
+
+
+def _to_nonneg_int(value: Any, field_name: str) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must not be boolean")
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{field_name} must be finite")
+        iv = int(value)
+    elif isinstance(value, int):
+        iv = value
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return 0
+        try:
+            iv = int(s)
+        except ValueError:
+            fv = float(s)
+            if not math.isfinite(fv):
+                raise ValueError(f"{field_name} must be finite") from None
+            iv = int(fv)
+    else:
+        iv = int(value)
+    if iv < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return iv
+
+
 def _parse_host_port(listen_addr: str, default_host: str = "0.0.0.0", default_port: int = 8081) -> tuple[str, int]:
     raw = str(listen_addr or "").strip()
     if not raw:
         return default_host, default_port
     if raw.startswith("["):
-        host_part, _, port_part = raw[1:].partition("]:")
-        return host_part or default_host, int(port_part or default_port)
+        if "]:" in raw:
+            host_part, _, port_part = raw[1:].partition("]:")
+            return host_part or default_host, int(port_part or default_port)
+        if raw.endswith("]"):
+            return raw[1:-1] or default_host, default_port
+        raise ValueError(f"Invalid bracketed listen address: {raw!r}")
+    if raw.count(":") > 1:
+        return raw, default_port
     if ":" not in raw:
         return raw, default_port
     host_part, port_part = raw.rsplit(":", 1)
@@ -82,6 +131,8 @@ def _build_ssl_context(tls_verify: bool | str, ca_file: str = "") -> ssl.SSLCont
 def _parse_cidr_list(items: Iterable[str]) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for raw in items:
+        if raw is None:
+            continue
         s = str(raw).strip()
         if s:
             nets.append(ipaddress.ip_network(s, strict=False))
@@ -93,26 +144,85 @@ def _parse_named_cidrs(items: Iterable[dict[str, Any]]) -> list[tuple[ipaddress.
     for entry in items:
         if not isinstance(entry, dict):
             continue
-        cidr = str(entry.get("cidr", "")).strip()
-        name = str(entry.get("name", "")).strip()
+        raw_cidr = entry.get("cidr")
+        raw_name = entry.get("name")
+        cidr = str(raw_cidr).strip() if raw_cidr is not None else ""
+        name = str(raw_name).strip() if raw_name is not None else ""
         if cidr and name:
             out.append((ipaddress.ip_network(cidr, strict=False), name))
     out.sort(key=lambda item: (-item[0].prefixlen, str(item[0])))
     return out
 
 
-def parse_goflow2_batch(raw_bytes: bytes, content_encoding: str = "") -> tuple[list[dict[str, Any]], int]:
+def _decompress_gzip_bounded(raw_bytes: bytes, max_bytes: int) -> bytes:
+    if not raw_bytes:
+        return b""
+    if max_bytes <= 0:
+        raise PayloadTooLargeError(f"Decompressed payload exceeds limit ({max_bytes} bytes)")
+
+    out = bytearray()
+    mv = memoryview(raw_bytes)
+    pos = 0
+    total_len = len(mv)
+
+    while pos < total_len:
+        if pos > 0 and mv[pos : pos + 2].tobytes() != b"\x1f\x8b":
+            if all(b == 0 for b in mv[pos:]):
+                break
+            raise ValueError("Invalid gzip payload: trailing non-gzip data")
+
+        decomp = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        remaining = mv[pos:]
+        idx = 0
+        try:
+            while idx < len(remaining) and not decomp.eof:
+                piece = remaining[idx : idx + 65536]
+                idx += len(piece)
+                pending = bytes(piece)
+                while pending:
+                    rem_out = max_bytes - len(out)
+                    part = decomp.decompress(pending, max_length=rem_out + 1)
+                    out.extend(part)
+                    if len(out) > max_bytes:
+                        raise PayloadTooLargeError(
+                            f"Decompressed gzip payload exceeds limit ({max_bytes} bytes)"
+                        )
+                    pending = decomp.unconsumed_tail
+            if not decomp.eof:
+                raise ValueError("Invalid gzip payload: truncated gzip stream")
+            rem_out = max_bytes - len(out)
+            tail = decomp.flush(rem_out + 1)
+            out.extend(tail)
+            if len(out) > max_bytes:
+                raise PayloadTooLargeError(
+                    f"Decompressed gzip payload exceeds limit ({max_bytes} bytes)"
+                )
+        except PayloadTooLargeError:
+            raise
+        except (OSError, EOFError, zlib.error) as exc:
+            raise ValueError(f"Invalid gzip payload: {exc}") from exc
+
+        consumed = idx - len(decomp.unused_data)
+        if consumed <= 0:
+            raise ValueError("Invalid gzip payload: unable to advance stream")
+        pos += consumed
+
+    return bytes(out)
+
+
+def parse_goflow2_batch(
+    raw_bytes: bytes,
+    content_encoding: str = "",
+    max_decompressed_bytes: int = _DEFAULT_MAX_DECOMPRESSED_BYTES,
+) -> tuple[list[dict[str, Any]], int]:
     """Parse GoFlow2 JSON object, JSON array, or NDJSON (optionally gzip-compressed).
 
     Returns (valid_records, parse_error_count). Raises ValueError when body is non-empty
-    yet completely unparseable as JSON/NDJSON.
+    yet completely unparseable as JSON/NDJSON, or PayloadTooLargeError on gzip expansion overflow.
     """
     payload = raw_bytes
     if content_encoding.lower().strip() == "gzip" or payload.startswith(b"\x1f\x8b"):
-        try:
-            payload = gzip.decompress(payload)
-        except (OSError, EOFError, zlib.error) as exc:
-            raise ValueError(f"Invalid gzip payload: {exc}") from exc
+        payload = _decompress_gzip_bounded(payload, max_bytes=max_decompressed_bytes)
 
     text = payload.decode("utf-8", errors="replace").strip()
     if not text:
@@ -120,15 +230,17 @@ def parse_goflow2_batch(raw_bytes: bytes, content_encoding: str = "") -> tuple[l
 
     if text.startswith(("{", "[")):
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
+            parsed = json.loads(text, parse_constant=_reject_non_finite)
+        except (json.JSONDecodeError, ValueError) as exc:
+            if "\n" not in text and not isinstance(exc, json.JSONDecodeError):
+                raise
             parsed = None
-        if isinstance(parsed, dict):
-            return [parsed], 0
-        if isinstance(parsed, list):
-            records = [item for item in parsed if isinstance(item, dict)]
-            return records, len(parsed) - len(records)
-        if parsed is not None:
+        else:
+            if isinstance(parsed, dict):
+                return [parsed], 0
+            if isinstance(parsed, list):
+                records = [item for item in parsed if isinstance(item, dict)]
+                return records, len(parsed) - len(records)
             raise ValueError("JSON payload must be an object or array")
 
     records: list[dict[str, Any]] = []
@@ -138,8 +250,8 @@ def parse_goflow2_batch(raw_bytes: bytes, content_encoding: str = "") -> tuple[l
         if not s:
             continue
         try:
-            obj = json.loads(s)
-        except json.JSONDecodeError:
+            obj = json.loads(s, parse_constant=_reject_non_finite)
+        except (json.JSONDecodeError, ValueError):
             errors += 1
             continue
         if isinstance(obj, dict):
@@ -158,24 +270,53 @@ def parse_goflow2_batch(raw_bytes: bytes, content_encoding: str = "") -> tuple[l
     return records, errors
 
 
-def parse_goflow2_payload(raw_bytes: bytes, content_encoding: str = "") -> list[dict[str, Any]]:
+def parse_goflow2_payload(
+    raw_bytes: bytes,
+    content_encoding: str = "",
+    max_decompressed_bytes: int = _DEFAULT_MAX_DECOMPRESSED_BYTES,
+) -> list[dict[str, Any]]:
     """Convenience wrapper returning only parsed flow dicts."""
-    records, _ = parse_goflow2_batch(raw_bytes, content_encoding=content_encoding)
+    records, _ = parse_goflow2_batch(
+        raw_bytes,
+        content_encoding=content_encoding,
+        max_decompressed_bytes=max_decompressed_bytes,
+    )
     return records
 
 
+_PROTO_CANONICAL: dict[str, str] = {v.upper(): v for v in PROTO_MAP.values()}
+_PROTO_CANONICAL.update(
+    {
+        "IPV6-ICMP": "ICMPv6",
+        "IGMP": "IGMP",
+        "VRRP": "VRRP",
+        "L2TP": "L2TP",
+        "ARP": "ARP",
+        "UNKNOWN": "UNKNOWN",
+        "OTHER": "OTHER",
+    }
+)
+
+
 def normalize_proto(raw_proto: Any) -> str:
-    """Normalize GoFlow2 protocol name or IANA protocol number to uppercase string."""
+    """Normalize GoFlow2 protocol name or IANA protocol number with bounded cardinality."""
     if raw_proto is None:
         return ""
+    if isinstance(raw_proto, bool):
+        return "OTHER"
     if isinstance(raw_proto, int):
-        return PROTO_MAP.get(raw_proto, str(raw_proto))
+        if 0 <= raw_proto < 256:
+            return PROTO_MAP.get(raw_proto, str(raw_proto))
+        return "OTHER"
     s = str(raw_proto).strip()
     if not s:
         return ""
     if s.isdigit():
-        return PROTO_MAP.get(int(s), s)
-    return s.upper()
+        num = int(s)
+        if 0 <= num < 256:
+            return PROTO_MAP.get(num, str(num))
+        return "OTHER"
+    return _PROTO_CANONICAL.get(s.upper(), "OTHER")
 
 
 @dataclass
@@ -246,6 +387,28 @@ class EnricherConfig:
     max_backoff_seconds: float = 30.0
     shipper_file_path: str = "/var/log/nxtflow/flows.jsonl"
     shipper_file_truncate_bytes: int = 50 * 1024 * 1024
+    max_decompressed_bytes: int | None = None
+
+    def clamp_bounds(self) -> None:
+        self.ring_buffer_max_flows = max(1, int(self.ring_buffer_max_flows))
+        self.batch_max_entries = max(1, int(self.batch_max_entries))
+        self.batch_max_wait_seconds = max(0.01, float(self.batch_max_wait_seconds))
+        self.max_body_bytes = max(0, int(self.max_body_bytes))
+        self.file_poll_interval = max(0.01, float(self.file_poll_interval))
+        self.netbox_sync_interval = max(1.0, float(self.netbox_sync_interval))
+        self.default_sampling_rate = max(1, int(self.default_sampling_rate))
+        self.max_retries = max(0, int(self.max_retries))
+        self.initial_backoff_seconds = max(0.0, float(self.initial_backoff_seconds))
+        self.max_backoff_seconds = max(self.initial_backoff_seconds, float(self.max_backoff_seconds))
+        self.loki_timeout_seconds = max(0.1, float(self.loki_timeout_seconds))
+        self.netbox_timeout_seconds = max(0.1, float(self.netbox_timeout_seconds))
+        self.rdns_timeout_seconds = max(0.05, float(self.rdns_timeout_seconds))
+        self.rdns_max_entries = max(1, int(self.rdns_max_entries))
+        if self.max_decompressed_bytes is not None:
+            self.max_decompressed_bytes = max(0, int(self.max_decompressed_bytes))
+
+    def __post_init__(self) -> None:
+        self.clamp_bounds()
 
 
 def load_enricher_config(
@@ -258,12 +421,18 @@ def load_enricher_config(
     env_path = os.environ.get("NXTFLOW_CONFIG_FILE", "").strip()
     default_path = Path("/etc/nxtflow/enricher.yaml")
     chosen: Path | None = None
+    explicit = False
     if config_file:
         chosen = Path(config_file).expanduser()
+        explicit = True
     elif env_path:
         chosen = Path(env_path).expanduser()
+        explicit = True
     elif default_path.is_file():
         chosen = default_path
+
+    if chosen is not None and explicit and not chosen.is_file():
+        raise FileNotFoundError(f"Enricher config file not found: {chosen}")
 
     if chosen is not None and chosen.is_file():
         data = yaml.safe_load(chosen.read_text(encoding="utf-8")) or {}
@@ -272,8 +441,10 @@ def load_enricher_config(
 
         collector = data.get("collector") or {}
         if isinstance(collector, dict):
-            cfg.site = str(collector.get("site", cfg.site))
-            cfg.job = str(collector.get("job", cfg.job))
+            if collector.get("site") is not None:
+                cfg.site = str(collector["site"])
+            if collector.get("job") is not None:
+                cfg.job = str(collector["job"])
             cfg.include_sampler_label = _parse_bool(collector.get("includeSamplerLabel"), cfg.include_sampler_label)
 
         ingest = data.get("ingest") or {}
@@ -281,15 +452,23 @@ def load_enricher_config(
             http_sec = ingest.get("http") or {}
             if isinstance(http_sec, dict):
                 cfg.http_enabled = _parse_bool(http_sec.get("enabled"), cfg.http_enabled)
-                cfg.http_listen_addr = str(http_sec.get("listenAddr", cfg.http_listen_addr))
-                cfg.max_body_bytes = int(http_sec.get("maxBodyBytes", cfg.max_body_bytes))
+                if http_sec.get("listenAddr") is not None:
+                    cfg.http_listen_addr = str(http_sec["listenAddr"])
+                if http_sec.get("maxBodyBytes") is not None:
+                    cfg.max_body_bytes = int(http_sec["maxBodyBytes"])
+                if http_sec.get("maxDecompressedBytes") is not None:
+                    cfg.max_decompressed_bytes = int(http_sec["maxDecompressedBytes"])
             file_sec = ingest.get("file") or {}
             if isinstance(file_sec, dict):
                 cfg.file_enabled = _parse_bool(file_sec.get("enabled"), cfg.file_enabled)
-                cfg.file_path = str(file_sec.get("path", cfg.file_path))
-                cfg.file_poll_interval = float(file_sec.get("pollIntervalSeconds", cfg.file_poll_interval))
-                cfg.file_position_file = str(file_sec.get("positionFile", cfg.file_position_file))
-                cfg.file_truncate_bytes = int(file_sec.get("truncateAtBytes", cfg.file_truncate_bytes))
+                if file_sec.get("path") is not None:
+                    cfg.file_path = str(file_sec["path"])
+                if file_sec.get("pollIntervalSeconds") is not None:
+                    cfg.file_poll_interval = float(file_sec["pollIntervalSeconds"])
+                if file_sec.get("positionFile") is not None:
+                    cfg.file_position_file = str(file_sec["positionFile"])
+                if file_sec.get("truncateAtBytes") is not None:
+                    cfg.file_truncate_bytes = int(file_sec["truncateAtBytes"])
             stdin_sec = ingest.get("stdin") or {}
             if isinstance(stdin_sec, dict):
                 cfg.stdin_enabled = _parse_bool(stdin_sec.get("enabled"), cfg.stdin_enabled)
@@ -298,31 +477,42 @@ def load_enricher_config(
                 cfg.stdin_enabled = True
 
         metrics_sec = data.get("metrics") or {}
-        if isinstance(metrics_sec, dict):
-            cfg.metrics_listen_addr = str(metrics_sec.get("listenAddr", cfg.metrics_listen_addr))
+        if isinstance(metrics_sec, dict) and metrics_sec.get("listenAddr") is not None:
+            cfg.metrics_listen_addr = str(metrics_sec["listenAddr"])
 
         sampling = data.get("sampling") or {}
         if isinstance(sampling, dict):
             cfg.respect_sampling_rate = _parse_bool(sampling.get("respectSamplingRate"), cfg.respect_sampling_rate)
-            cfg.default_sampling_rate = max(1, int(sampling.get("defaultSamplingRate", cfg.default_sampling_rate)))
+            if sampling.get("defaultSamplingRate") is not None:
+                cfg.default_sampling_rate = max(1, int(sampling["defaultSamplingRate"]))
 
         classification = data.get("classification") or {}
         if isinstance(classification, dict):
-            if "localCidrs" in classification and isinstance(classification["localCidrs"], list):
-                cfg.local_cidrs = [str(c) for c in classification["localCidrs"]]
-            if "wanIps" in classification and isinstance(classification["wanIps"], list):
-                cfg.wan_ips = [str(ip).strip() for ip in classification["wanIps"] if str(ip).strip()]
-            if "internalCidrs" in classification and isinstance(classification["internalCidrs"], list):
+            if isinstance(classification.get("localCidrs"), list):
+                cfg.local_cidrs = [str(c) for c in classification["localCidrs"] if c is not None]
+            if isinstance(classification.get("wanIps"), list):
+                cfg.wan_ips = [str(ip).strip() for ip in classification["wanIps"] if ip is not None and str(ip).strip()]
+            if isinstance(classification.get("internalCidrs"), list):
                 cfg.internal_cidrs = list(classification["internalCidrs"])
-            if "excludedHosts" in classification and isinstance(classification["excludedHosts"], list):
-                cfg.excluded_hosts = [str(h).strip() for h in classification["excludedHosts"] if str(h).strip()]
+            if isinstance(classification.get("excludedHosts"), list):
+                cfg.excluded_hosts = [
+                    str(h).strip() for h in classification["excludedHosts"] if h is not None and str(h).strip()
+                ]
 
         resolution = data.get("resolution") or {}
         if isinstance(resolution, dict):
             if isinstance(resolution.get("staticHosts"), dict):
-                cfg.static_hosts = {str(k).strip(): str(v).strip() for k, v in resolution["staticHosts"].items()}
+                cfg.static_hosts = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in resolution["staticHosts"].items()
+                    if k is not None and v is not None
+                }
             if isinstance(resolution.get("services"), dict):
-                cfg.services = {str(k).strip(): str(v).strip() for k, v in resolution["services"].items()}
+                cfg.services = {
+                    str(k).strip(): str(v).strip()
+                    for k, v in resolution["services"].items()
+                    if k is not None and v is not None
+                }
             if isinstance(resolution.get("extraCidrs"), list):
                 cfg.extra_cidrs = list(resolution["extraCidrs"])
             cfg.use_default_cidrs = _parse_bool(resolution.get("useDefaultCidrs"), cfg.use_default_cidrs)
@@ -330,46 +520,70 @@ def load_enricher_config(
             if isinstance(rdns, dict):
                 cfg.rdns_enabled = _parse_bool(rdns.get("enabled"), cfg.rdns_enabled)
                 cfg.rdns_private = _parse_bool(rdns.get("private"), cfg.rdns_private)
-                cfg.rdns_timeout_seconds = float(rdns.get("timeoutSeconds", cfg.rdns_timeout_seconds))
-                cfg.rdns_max_entries = int(rdns.get("maxEntries", cfg.rdns_max_entries))
-                cfg.rdns_ttl_seconds = float(rdns.get("ttlSeconds", cfg.rdns_ttl_seconds))
-                cfg.rdns_negative_ttl_seconds = float(rdns.get("negativeTtlSeconds", cfg.rdns_negative_ttl_seconds))
+                if rdns.get("timeoutSeconds") is not None:
+                    cfg.rdns_timeout_seconds = float(rdns["timeoutSeconds"])
+                if rdns.get("maxEntries") is not None:
+                    cfg.rdns_max_entries = int(rdns["maxEntries"])
+                if rdns.get("ttlSeconds") is not None:
+                    cfg.rdns_ttl_seconds = float(rdns["ttlSeconds"])
+                if rdns.get("negativeTtlSeconds") is not None:
+                    cfg.rdns_negative_ttl_seconds = float(rdns["negativeTtlSeconds"])
 
         netbox = data.get("netbox") or {}
         if isinstance(netbox, dict):
             cfg.netbox_enabled = _parse_bool(netbox.get("enabled"), cfg.netbox_enabled)
-            cfg.netbox_url = str(netbox.get("url", cfg.netbox_url) or "").rstrip("/")
-            cfg.netbox_token = str(netbox.get("token", cfg.netbox_token) or "")
-            if "tlsVerify" in netbox:
+            if netbox.get("url") is not None:
+                cfg.netbox_url = str(netbox["url"]).rstrip("/")
+            if netbox.get("token") is not None:
+                cfg.netbox_token = str(netbox["token"])
+            if "tlsVerify" in netbox and netbox["tlsVerify"] is not None:
                 cfg.netbox_tls_verify = parse_tls_verify(netbox["tlsVerify"])
-            cfg.netbox_sync_interval = float(netbox.get("syncIntervalSeconds", cfg.netbox_sync_interval))
-            cfg.netbox_timeout_seconds = float(netbox.get("timeoutSeconds", cfg.netbox_timeout_seconds))
+            if netbox.get("syncIntervalSeconds") is not None:
+                cfg.netbox_sync_interval = float(netbox["syncIntervalSeconds"])
+            if netbox.get("timeoutSeconds") is not None:
+                cfg.netbox_timeout_seconds = float(netbox["timeoutSeconds"])
             cfg.netbox_strip_domain = _parse_bool(netbox.get("stripDomain"), cfg.netbox_strip_domain)
 
         shipper = data.get("shipper") or {}
         if isinstance(shipper, dict):
-            cfg.shipper_mode = str(shipper.get("mode", cfg.shipper_mode)).strip().lower()
+            if shipper.get("mode") is not None:
+                cfg.shipper_mode = str(shipper["mode"]).strip().lower()
             loki_sec = shipper.get("loki") or {}
             if isinstance(loki_sec, dict):
-                cfg.loki_url = str(loki_sec.get("url", cfg.loki_url) or "").rstrip("/")
-                cfg.loki_tenant_id = str(loki_sec.get("tenantId", cfg.loki_tenant_id) or "")
-                cfg.loki_username = str(loki_sec.get("username", cfg.loki_username) or "")
-                cfg.loki_password = str(loki_sec.get("password", cfg.loki_password) or "")
-                cfg.loki_bearer_token = str(loki_sec.get("bearerToken", cfg.loki_bearer_token) or "")
-                if "tlsVerify" in loki_sec:
+                if loki_sec.get("url") is not None:
+                    cfg.loki_url = str(loki_sec["url"]).rstrip("/")
+                if loki_sec.get("tenantId") is not None:
+                    cfg.loki_tenant_id = str(loki_sec["tenantId"])
+                if loki_sec.get("username") is not None:
+                    cfg.loki_username = str(loki_sec["username"])
+                if loki_sec.get("password") is not None:
+                    cfg.loki_password = str(loki_sec["password"])
+                if loki_sec.get("bearerToken") is not None:
+                    cfg.loki_bearer_token = str(loki_sec["bearerToken"])
+                if "tlsVerify" in loki_sec and loki_sec["tlsVerify"] is not None:
                     cfg.loki_tls_verify = parse_tls_verify(loki_sec["tlsVerify"])
-                cfg.loki_ca_file = str(loki_sec.get("caFile", cfg.loki_ca_file) or "")
-                cfg.loki_timeout_seconds = float(loki_sec.get("timeoutSeconds", cfg.loki_timeout_seconds))
-                cfg.batch_max_entries = int(loki_sec.get("batchMaxEntries", cfg.batch_max_entries))
-                cfg.batch_max_wait_seconds = float(loki_sec.get("batchMaxWaitSeconds", cfg.batch_max_wait_seconds))
-                cfg.ring_buffer_max_flows = int(loki_sec.get("ringBufferMaxFlows", cfg.ring_buffer_max_flows))
-                cfg.max_retries = int(loki_sec.get("maxRetries", cfg.max_retries))
-                cfg.initial_backoff_seconds = float(loki_sec.get("initialBackoffSeconds", cfg.initial_backoff_seconds))
-                cfg.max_backoff_seconds = float(loki_sec.get("maxBackoffSeconds", cfg.max_backoff_seconds))
+                if loki_sec.get("caFile") is not None:
+                    cfg.loki_ca_file = str(loki_sec["caFile"])
+                if loki_sec.get("timeoutSeconds") is not None:
+                    cfg.loki_timeout_seconds = float(loki_sec["timeoutSeconds"])
+                if loki_sec.get("batchMaxEntries") is not None:
+                    cfg.batch_max_entries = int(loki_sec["batchMaxEntries"])
+                if loki_sec.get("batchMaxWaitSeconds") is not None:
+                    cfg.batch_max_wait_seconds = float(loki_sec["batchMaxWaitSeconds"])
+                if loki_sec.get("ringBufferMaxFlows") is not None:
+                    cfg.ring_buffer_max_flows = int(loki_sec["ringBufferMaxFlows"])
+                if loki_sec.get("maxRetries") is not None:
+                    cfg.max_retries = int(loki_sec["maxRetries"])
+                if loki_sec.get("initialBackoffSeconds") is not None:
+                    cfg.initial_backoff_seconds = float(loki_sec["initialBackoffSeconds"])
+                if loki_sec.get("maxBackoffSeconds") is not None:
+                    cfg.max_backoff_seconds = float(loki_sec["maxBackoffSeconds"])
             sfile = shipper.get("file") or {}
             if isinstance(sfile, dict):
-                cfg.shipper_file_path = str(sfile.get("path", cfg.shipper_file_path))
-                cfg.shipper_file_truncate_bytes = int(sfile.get("truncateAtBytes", cfg.shipper_file_truncate_bytes))
+                if sfile.get("path") is not None:
+                    cfg.shipper_file_path = str(sfile["path"])
+                if sfile.get("truncateAtBytes") is not None:
+                    cfg.shipper_file_truncate_bytes = int(sfile["truncateAtBytes"])
 
     # Environment overrides
     if os.environ.get("NXTFLOW_SITE", "").strip():
@@ -415,6 +629,7 @@ def load_enricher_config(
         if val is not None and hasattr(cfg, key):
             setattr(cfg, key, val)
 
+    cfg.clamp_bounds()
     return cfg
 
 
@@ -603,9 +818,15 @@ class NetBoxSync:
                     if not addr_raw:
                         continue
                     ip_only = addr_raw.split("/", 1)[0].strip()
-                    assigned = item.get("assigned_object") or {}
-                    vm_name = ((assigned.get("virtual_machine") or {}).get("name") or "") if isinstance(assigned, dict) else ""
-                    dev_name = ((assigned.get("device") or {}).get("name") or "") if isinstance(assigned, dict) else ""
+                    assigned = item.get("assigned_object")
+                    if isinstance(assigned, dict):
+                        vm_obj = assigned.get("virtual_machine")
+                        dev_obj = assigned.get("device")
+                        vm_name = vm_obj.get("name") or "" if isinstance(vm_obj, dict) else ""
+                        dev_name = dev_obj.get("name") or "" if isinstance(dev_obj, dict) else ""
+                    else:
+                        vm_name = ""
+                        dev_name = ""
                     candidate = (
                         str(item.get("dns_name") or "").strip()
                         or str(vm_name).strip()
@@ -620,7 +841,18 @@ class NetBoxSync:
                             candidate = candidate.split(".", 1)[0]
                     new_map[ip_only] = candidate
                 raw_next = payload.get("next")
-                next_url = urllib.parse.urljoin(next_url, str(raw_next).strip()) if raw_next else None
+                if raw_next:
+                    candidate_next = urllib.parse.urljoin(next_url, str(raw_next).strip())
+                    base_parsed = urllib.parse.urlparse(self.cfg.netbox_url)
+                    next_parsed = urllib.parse.urlparse(candidate_next)
+                    if (
+                        next_parsed.scheme not in ("http", "https")
+                        or next_parsed.netloc != base_parsed.netloc
+                    ):
+                        raise ValueError(f"Unexpected NetBox pagination URL: {candidate_next}")
+                    next_url = candidate_next
+                else:
+                    next_url = None
         except (
             urllib.error.URLError,
             urllib.error.HTTPError,
@@ -645,10 +877,12 @@ class LokiShipper:
     """Thread-safe bounded ring buffer + background shipper (Loki gzip HTTP or JSONL file)."""
 
     def __init__(self, cfg: EnricherConfig, metrics: EnricherMetrics) -> None:
+        cfg.clamp_bounds()
         self.cfg = cfg
         self.metrics = metrics
         self._buffer: deque[tuple[int, dict[str, Any], str]] = deque()
         self._cond = threading.Condition()
+        self._ship_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._ssl_ctx: ssl.SSLContext | None = (
             _build_ssl_context(cfg.loki_tls_verify, cfg.loki_ca_file)
@@ -713,13 +947,14 @@ class LokiShipper:
                 self._ship_batch(batch)
 
     def _ship_batch(self, batch: list[tuple[int, dict[str, Any], str]]) -> None:
-        if self.cfg.shipper_mode in ("file", "alloy"):
-            self._write_file_batch(batch)
-            return
-        if not self.cfg.loki_url:
-            # No Loki URL configured (e.g., dry-run or metrics-only mode)
-            return
-        self._push_loki_batch(batch)
+        with self._ship_lock:
+            if self.cfg.shipper_mode in ("file", "alloy"):
+                self._write_file_batch(batch)
+                return
+            if not self.cfg.loki_url:
+                # No Loki URL configured (e.g., dry-run or metrics-only mode)
+                return
+            self._push_loki_batch(batch)
 
     def _write_file_batch(self, batch: list[tuple[int, dict[str, Any], str]]) -> None:
         target = Path(self.cfg.shipper_file_path)
@@ -837,7 +1072,16 @@ class EnricherPipeline:
         self.shipper = LokiShipper(self.cfg, self.metrics)
 
         self._local_nets = _parse_cidr_list(self.cfg.local_cidrs)
-        self._wan_ips = set(self.cfg.wan_ips)
+        normalized_wan: set[str] = set()
+        for raw_ip in self.cfg.wan_ips:
+            s = str(raw_ip).strip()
+            if not s:
+                continue
+            try:
+                normalized_wan.add(str(ipaddress.ip_address(s)))
+            except ValueError:
+                normalized_wan.add(s)
+        self._wan_ips = normalized_wan
         self._internal_cidrs = _parse_named_cidrs(self.cfg.internal_cidrs)
         self._extra_cidrs = _parse_named_cidrs(self.cfg.extra_cidrs)
         self._excluded_hosts = set(self.cfg.excluded_hosts)
@@ -864,12 +1108,12 @@ class EnricherPipeline:
     def is_local_ip(self, ip: str) -> bool:
         if not ip:
             return False
-        if ip in self._wan_ips:
-            return True
         try:
             addr = ipaddress.ip_address(ip)
         except ValueError:
-            return False
+            return ip in self._wan_ips
+        if str(addr) in self._wan_ips or ip in self._wan_ips:
+            return True
         if addr.is_loopback:
             return True
         return any(addr in net for net in self._local_nets)
@@ -948,9 +1192,9 @@ class EnricherPipeline:
         if src_host in self._excluded_hosts or dst_host in self._excluded_hosts:
             return None
 
-        raw_bytes = int(flow.get("bytes", 0) or 0)
-        raw_packets = int(flow.get("packets", 0) or 0)
-        raw_rate = int(flow.get("sampling_rate", 0) or 0)
+        raw_bytes = _to_nonneg_int(flow.get("bytes"), "bytes")
+        raw_packets = _to_nonneg_int(flow.get("packets"), "packets")
+        raw_rate = _to_nonneg_int(flow.get("sampling_rate"), "sampling_rate")
         if self.cfg.respect_sampling_rate and raw_rate > 0:
             scale = raw_rate
         else:
@@ -959,8 +1203,8 @@ class EnricherPipeline:
         scaled_packets = raw_packets * scale
 
         proto = normalize_proto(flow.get("proto", ""))
-        src_port = int(flow.get("src_port", 0) or 0)
-        dst_port = int(flow.get("dst_port", 0) or 0)
+        src_port = _to_nonneg_int(flow.get("src_port"), "src_port")
+        dst_port = _to_nonneg_int(flow.get("dst_port"), "dst_port")
         direction = self.classify_direction(src_addr, dst_addr)
 
         enriched: dict[str, Any] = {
@@ -991,21 +1235,38 @@ class EnricherPipeline:
         for raw in records:
             try:
                 enriched = self.enrich_flow(raw)
-            except (ValueError, TypeError):
+                if enriched is None:
+                    continue
+                raw_ts = raw.get("time_received_ns")
+                ts_ns = now_ns
+                if (
+                    isinstance(raw_ts, (int, float))
+                    and not isinstance(raw_ts, bool)
+                    and math.isfinite(float(raw_ts))
+                ):
+                    parsed_ts = int(raw_ts)
+                    if parsed_ts > 0:
+                        ts_ns = parsed_ts
+            except (ValueError, TypeError, OverflowError):
                 errors += 1
                 self.metrics.dropped_flows.inc()
                 continue
-            if enriched is None:
-                continue
-            raw_ts = raw.get("time_received_ns")
-            ts_ns = int(raw_ts) if isinstance(raw_ts, (int, float)) and int(raw_ts) > 0 else now_ns
             self.shipper.enqueue(ts_ns, enriched)
             accepted += 1
         return accepted, errors
 
     def ingest_bytes(self, raw_bytes: bytes, content_encoding: str = "") -> tuple[int, int]:
         """Parse raw payload bytes (JSON/array/NDJSON/gzip), enrich, and enqueue."""
-        records, parse_errors = parse_goflow2_batch(raw_bytes, content_encoding=content_encoding)
+        decompressed_cap = (
+            self.cfg.max_decompressed_bytes
+            if self.cfg.max_decompressed_bytes is not None
+            else max(65536, min(_DEFAULT_MAX_DECOMPRESSED_BYTES, max(self.cfg.max_body_bytes, 1) * 10))
+        )
+        records, parse_errors = parse_goflow2_batch(
+            raw_bytes,
+            content_encoding=content_encoding,
+            max_decompressed_bytes=decompressed_cap,
+        )
         if parse_errors:
             self.metrics.dropped_flows.inc(parse_errors)
         accepted, enrich_errors = self.ingest_records(records)
@@ -1051,12 +1312,21 @@ class EnricherPipeline:
                         raise ValueError("invalid chunk size")
                     chunk_size = int(size_part, 16)
                     if chunk_size == 0:
+                        trailer_lines = 0
+                        trailer_bytes = 0
                         while True:
                             trailer = self.rfile.readline(65536)
                             if not trailer or trailer in (b"\r\n", b"\n"):
                                 break
                             if not trailer.endswith(b"\n"):
                                 raise ValueError("malformed chunk trailer")
+                            trailer_lines += 1
+                            trailer_bytes += len(trailer)
+                            if (
+                                trailer_lines > _MAX_CHUNK_TRAILER_LINES
+                                or trailer_bytes > _MAX_CHUNK_TRAILER_BYTES
+                            ):
+                                raise _PayloadTooLarge("chunk trailers exceed maximum allowed size")
                         return bytes(buf)
                     if len(buf) + chunk_size > max_bytes:
                         raise _PayloadTooLarge("payload exceeds maxBodyBytes")
@@ -1122,6 +1392,10 @@ class EnricherPipeline:
                 encoding = self.headers.get("Content-Encoding", "")
                 try:
                     accepted, errors = pipeline.ingest_bytes(raw, content_encoding=encoding)
+                except PayloadTooLargeError as exc:
+                    pipeline.metrics.dropped_flows.inc()
+                    self._send_json(413, {"error": str(exc)}, close_conn=True)
+                    return
                 except ValueError as exc:
                     pipeline.metrics.dropped_flows.inc()
                     self._send_json(400, {"error": str(exc)})
@@ -1219,7 +1493,7 @@ class EnricherPipeline:
                             offset += len(complete)
                             try:
                                 self.ingest_bytes(complete)
-                            except ValueError:
+                            except (ValueError, TypeError, OverflowError):
                                 self.metrics.dropped_flows.inc()
                             try:
                                 pos_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1236,12 +1510,14 @@ class EnricherPipeline:
                         and offset >= size
                     ):
                         with src_path.open("r+b") as fh:
-                            fh.truncate(0)
-                        offset = 0
-                        try:
-                            pos_path.write_text(json.dumps({"inode": inode, "offset": 0}), encoding="utf-8")
-                        except OSError:
-                            pass
+                            cur_st = os.fstat(fh.fileno())
+                            if cur_st.st_ino == inode and cur_st.st_size == offset:
+                                fh.truncate(0)
+                                offset = 0
+                                try:
+                                    pos_path.write_text(json.dumps({"inode": inode, "offset": 0}), encoding="utf-8")
+                                except OSError:
+                                    pass
             except OSError as exc:
                 LOGGER.debug("File tailer cycle error: %s", exc)
 
@@ -1249,6 +1525,40 @@ class EnricherPipeline:
 
     def _run_stdin_reader(self) -> None:
         stream = self._stdin_stream if self._stdin_stream is not None else sys.stdin
+        raw_buffer = getattr(stream, "buffer", None) if self._stdin_stream is None else None
+        if raw_buffer is not None:
+            while not self._stop_event.is_set():
+                raw_line = raw_buffer.readline()
+                if not raw_line:
+                    break
+                stripped_bytes = raw_line.strip()
+                if not stripped_bytes:
+                    continue
+                try:
+                    self.ingest_bytes(stripped_bytes)
+                except (ValueError, TypeError, OverflowError):
+                    self.metrics.dropped_flows.inc()
+            return
+
+        if hasattr(stream, "readline"):
+            while not self._stop_event.is_set():
+                try:
+                    line = stream.readline()
+                except UnicodeDecodeError:
+                    self.metrics.dropped_flows.inc()
+                    continue
+                if not line:
+                    break
+                stripped = line.strip() if isinstance(line, str) else line.decode("utf-8", errors="replace").strip()
+                if not stripped:
+                    continue
+                try:
+                    payload_bytes = stripped.encode("utf-8") if isinstance(stripped, str) else stripped
+                    self.ingest_bytes(payload_bytes)
+                except (ValueError, TypeError, OverflowError):
+                    self.metrics.dropped_flows.inc()
+            return
+
         for line in stream:
             if self._stop_event.is_set():
                 break
@@ -1257,7 +1567,7 @@ class EnricherPipeline:
                 continue
             try:
                 self.ingest_bytes(stripped.encode("utf-8"))
-            except ValueError:
+            except (ValueError, TypeError, OverflowError):
                 self.metrics.dropped_flows.inc()
 
     def start(self) -> None:
@@ -1325,8 +1635,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             overrides["file_enabled"] = True
             overrides["file_path"] = args.input_file
 
-    cfg = load_enricher_config(config_file=args.config, **overrides)
-    pipeline = EnricherPipeline(cfg)
+    try:
+        cfg = load_enricher_config(config_file=args.config, **overrides)
+        pipeline = EnricherPipeline(cfg)
+    except (FileNotFoundError, ValueError, OSError, yaml.YAMLError) as exc:
+        print(f"Error loading enricher configuration: {exc}", file=sys.stderr)
+        return 2
+
     stop_flag = threading.Event()
 
     def _handle_sig(_signum: int, _frame: Any) -> None:
@@ -1335,7 +1650,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, _handle_sig)
     signal.signal(signal.SIGINT, _handle_sig)
 
-    pipeline.start()
+    try:
+        pipeline.start()
+    except OSError as exc:
+        print(f"Error starting enricher pipeline: {exc}", file=sys.stderr)
+        pipeline.stop()
+        return 2
     LOGGER.info(
         "nxtflow-enricher started (site=%s, job=%s, http=%s, metrics=%s, mode=%s)",
         cfg.site,
