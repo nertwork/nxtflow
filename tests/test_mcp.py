@@ -128,6 +128,10 @@ def test_tier5_mcp_bad_tls_returns_error_json_and_empty_port_env(tmp_path, monke
     args = parse_args([])
     assert args.port == 8000
 
+    monkeypatch.setenv("NXTFLOW_MCP_PORT", "tcp://10.96.12.34:8000")
+    k8s_args = parse_args(["--port", "8000"])
+    assert k8s_args.port == 8000
+
     bad_cfg = NxtflowConfig(tls_verify=str(tmp_path / "missing-ca.pem"))
     mcp = create_server(config=bad_cfg)
 

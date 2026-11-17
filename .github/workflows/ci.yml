@@ -143,6 +143,11 @@ jobs:
           kind load docker-image ghcr.io/nertwork/nxtflow-enricher:ci-test --name "$KIND_CLUSTER"
           kind load docker-image ghcr.io/nertwork/nxtflow-mcp:ci-test --name "$KIND_CLUSTER"
           kubectl create namespace nxtflow
-          helm install nxtflow charts/nxtflow -n nxtflow             --set tags.standalone=false             --set externalLoki.url=http://localhost:3100             --set enricher.image.tag=ci-test             --set enricher.image.pullPolicy=IfNotPresent             --set mcp.image.tag=ci-test             --set mcp.image.pullPolicy=IfNotPresent             --set collector.service.type=ClusterIP             --wait --timeout 180s
+          if ! helm install nxtflow charts/nxtflow -n nxtflow             --set tags.standalone=false             --set externalLoki.url=http://localhost:3100             --set enricher.image.tag=ci-test             --set enricher.image.pullPolicy=IfNotPresent             --set mcp.image.tag=ci-test             --set mcp.image.pullPolicy=IfNotPresent             --set collector.service.type=ClusterIP             --wait --timeout 180s; then
+            kubectl get pods -n nxtflow -o wide || true
+            kubectl describe pods -n nxtflow || true
+            kubectl logs -n nxtflow --all-containers --tail=100 || true
+            exit 1
+          fi
           kubectl get pods -n nxtflow
           helm test nxtflow -n nxtflow

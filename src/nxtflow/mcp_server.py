@@ -227,7 +227,11 @@ def create_server(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     env_transport = os.environ.get("NXTFLOW_MCP_TRANSPORT", "stdio").strip() or "stdio"
     env_host = os.environ.get("NXTFLOW_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    env_port = int(os.environ.get("NXTFLOW_MCP_PORT", "").strip() or "8000")
+    raw_port = os.environ.get("NXTFLOW_MCP_PORT", "").strip()
+    if raw_port and not raw_port.isdigit():
+        # Guard against Kubernetes service-link injection (NXTFLOW_MCP_PORT=tcp://10.x.x.x:8000)
+        raw_port = ""
+    env_port = int(raw_port or "8000")
     env_stateless = os.environ.get("NXTFLOW_MCP_STATELESS_HTTP", "").strip().lower() in ("1", "true", "yes")
 
     parser = argparse.ArgumentParser(prog="nxtflow-mcp", description="nxtflow read-only FastMCP server")
