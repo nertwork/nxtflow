@@ -224,21 +224,52 @@ def create_server(
     return mcp
 
 
+_VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
+
+
+def _valid_port(value: str) -> int:
+    s = value.strip()
+    if not s.isascii():
+        raise argparse.ArgumentTypeError(f"invalid port value: {value!r}")
+    try:
+        port = int(s, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid port value: {value!r}") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be between 1 and 65535 (got {port})")
+    return port
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    env_transport = os.environ.get("NXTFLOW_MCP_TRANSPORT", "stdio").strip() or "stdio"
-    env_host = os.environ.get("NXTFLOW_MCP_HOST", "127.0.0.1").strip() or "127.0.0.1"
-    env_port = int(os.environ.get("NXTFLOW_MCP_PORT", "").strip() or "8000")
+    raw_transport = os.environ.get("NXTFLOW_MCP_TRANSPORT", "stdio").strip().lower()
+    env_transport = raw_transport if raw_transport in _VALID_TRANSPORTS else "stdio"
+
+    raw_host = os.environ.get("NXTFLOW_MCP_HOST", "127.0.0.1").strip()
+    if not raw_host or "://" in raw_host or any(ch.isspace() for ch in raw_host):
+        env_host = "127.0.0.1"
+    else:
+        env_host = raw_host
+
+    raw_port = os.environ.get("NXTFLOW_MCP_PORT", "").strip()
+    env_port = 8000
+    # Guard against Kubernetes service-link injection (NXTFLOW_MCP_PORT=tcp://10.x.x.x:8000),
+    # non-ASCII Unicode digits (e.g. "²", "٢"), and out-of-range TCP ports.
+    if raw_port.isascii() and raw_port.isdecimal():
+        candidate_port = int(raw_port)
+        if 1 <= candidate_port <= 65535:
+            env_port = candidate_port
+
     env_stateless = os.environ.get("NXTFLOW_MCP_STATELESS_HTTP", "").strip().lower() in ("1", "true", "yes")
 
     parser = argparse.ArgumentParser(prog="nxtflow-mcp", description="nxtflow read-only FastMCP server")
     parser.add_argument(
         "--transport",
-        choices=("stdio", "streamable-http", "sse"),
+        choices=_VALID_TRANSPORTS,
         default=env_transport,
         help="MCP transport mode (default: stdio)",
     )
     parser.add_argument("--host", default=env_host, help="HTTP bind host (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=env_port, help="HTTP bind port (default: 8000)")
+    parser.add_argument("--port", type=_valid_port, default=env_port, help="HTTP bind port (default: 8000)")
     parser.add_argument(
         "--stateless-http",
         action="store_true",

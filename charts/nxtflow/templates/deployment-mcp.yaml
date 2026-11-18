@@ -20,6 +20,7 @@ spec:
         {{- include "nxtflow.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: mcp
     spec:
+      enableServiceLinks: false
       containers:
         - name: mcp
           image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag | default (printf "v%s" (trimPrefix "v" .Chart.AppVersion)) }}"

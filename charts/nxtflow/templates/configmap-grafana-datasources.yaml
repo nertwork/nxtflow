@@ -8,7 +8,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nxtflow.labels" . | nindent 4 }}
-    grafana_datasource: "1"
+    {{ ((.Values.grafana.sidecar).datasources).label | default "grafana_datasource" }}: {{ ((.Values.grafana.sidecar).datasources).labelValue | default "1" | quote }}
 data:
   nxtflow-datasources.yaml: |
     apiVersion: 1

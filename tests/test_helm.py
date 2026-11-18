@@ -573,3 +573,19 @@ def test_tier5_zero_pii_patterns_and_sync_gh_pages_anchors(tmp_path: Path) -> No
     assert "(architecture.html#sankey)" in out
     assert "(https://github.com/nertwork/nxtflow/blob/main/charts/nxtflow/values.yaml)" in out
     assert "(../assets/logo.svg)" in out
+
+
+def test_helm_grafana_datasource_sidecar_label_parameterized() -> None:
+    default_docs = _render_chart("rel", "-f", str(EXAMPLES_DIR / "values-standalone.yaml"))
+    default_ds = next(d for d in default_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-grafana-datasources")
+    assert default_ds["metadata"]["labels"]["grafana_datasource"] == "1"
+
+    custom_docs = _render_chart(
+        "rel",
+        "-f", str(EXAMPLES_DIR / "values-standalone.yaml"),
+        "--set", "grafana.sidecar.datasources.label=custom_ds_label",
+        "--set", "grafana.sidecar.datasources.labelValue=custom_val",
+    )
+    custom_ds = next(d for d in custom_docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "rel-nxtflow-grafana-datasources")
+    assert "grafana_datasource" not in custom_ds["metadata"]["labels"]
+    assert custom_ds["metadata"]["labels"]["custom_ds_label"] == "custom_val"
