@@ -68,7 +68,7 @@ jobs:
             ghcr.io/nertwork/nxtflow-mcp:latest
 
       - name: Setup Helm v4
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: "v4.3.1"
 
