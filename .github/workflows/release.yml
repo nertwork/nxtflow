@@ -46,7 +46,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & Push Multi-Arch Enricher Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.enricher
@@ -57,7 +57,7 @@ jobs:
             ghcr.io/nertwork/nxtflow-enricher:latest
 
       - name: Build & Push Multi-Arch MCP Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.mcp
