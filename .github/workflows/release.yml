@@ -85,7 +85,7 @@ jobs:
           helm push "dist/nxtflow-${VER}.tgz" oci://ghcr.io/nertwork/charts
 
       - name: Build Python sdist & wheel
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: |
