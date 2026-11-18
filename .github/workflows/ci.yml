@@ -63,7 +63,7 @@ jobs:
           pip install -e ".[mcp,dev]" jsonschema
 
       - name: Setup Helm v4
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: "v4.3.1"
 
@@ -105,7 +105,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build Enricher Container Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.enricher
@@ -114,7 +114,7 @@ jobs:
           tags: ghcr.io/nertwork/nxtflow-enricher:ci-test
 
       - name: Build MCP Container Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.mcp
@@ -123,7 +123,7 @@ jobs:
           tags: ghcr.io/nertwork/nxtflow-mcp:ci-test
 
       - name: Setup Helm v4
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: "v4.3.1"
 
