@@ -14,6 +14,7 @@ PAGES = [
     ("docs/index.md", "index.html", "Overview"),
     ("docs/architecture.md", "architecture.html", "Architecture"),
     ("docs/standalone-vs-integrated.md", "standalone-vs-integrated.html", "Deployment Modes"),
+    ("charts/nxtflow/README.md", "helm-chart.html", "Helm Chart"),
     ("docs/exporters.md", "exporters.html", "Exporter Guides"),
     ("docs/ai-integration.md", "ai-integration.html", "CLI, MCP & AI Skill"),
     ("CHANGELOG.md", "changelog.html", "Changelog"),
@@ -152,9 +153,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 """
 
 
-def rewrite_links(md_text: str) -> str:
+def rewrite_links(md_text: str, src_rel: str = "") -> str:
     """Rewrite relative docs/ and ../ links (including #anchors) for the static _site output."""
+    md_text = re.sub(
+        r"\((?:\.\./|docs/)?(?:\.\./)?charts/nxtflow/README\.md(#[^)]*)?\)",
+        lambda m: f"(helm-chart.html{m.group(1) or ''})",
+        md_text,
+    )
+    if src_rel == "charts/nxtflow/README.md":
+        md_text = re.sub(
+            r"\((values\.yaml|values\.schema\.json)(#[^)]*)?\)",
+            lambda m: f"(https://github.com/nertwork/nxtflow/blob/main/charts/nxtflow/{m.group(1)}{m.group(2) or ''})",
+            md_text,
+        )
     for md_src, html_dst, _ in PAGES:
+        if md_src == "charts/nxtflow/README.md":
+            continue
         md_name = Path(md_src).name
         md_text = re.sub(
             rf"\((?:\.\./|docs/)?{re.escape(md_name)}(#[^)]*)?\)",
@@ -205,15 +219,18 @@ def main() -> int:
             continue
         import markdown
 
-        md_text = rewrite_links(src_path.read_text(encoding="utf-8"))
+        md_text = rewrite_links(src_path.read_text(encoding="utf-8"), src_rel=src_rel)
 
         md = markdown.Markdown(extensions=["toc", "fenced_code", "tables"])
         body_html = md.convert(md_text)
         toc_html = md.toc
 
         nav_links = "\n      ".join(
-            f'<a href="{h}" class="{"active" if h == dest_html else ""}">{html.escape(lbl)}</a>'
-            for _, h, lbl in PAGES
+            [
+                f'<a href="{h}" class="{"active" if h == dest_html else ""}">{html.escape(lbl)}</a>'
+                for _, h, lbl in PAGES
+            ]
+            + ['<a href="https://github.com/nertwork/nxtflow" target="_blank" rel="noopener">GitHub</a>']
         )
 
         rendered = HTML_TEMPLATE.format(
@@ -224,6 +241,35 @@ def main() -> int:
             toc_html=toc_html,
         )
         (out_dir / dest_html).write_text(rendered, encoding="utf-8")
+
+    base_url = "https://nertwork.github.io/nxtflow"
+    url_entries = "\n".join(
+        f"  <url><loc>{base_url}/{'' if h == 'index.html' else h}</loc></url>"
+        for _, h, _ in PAGES
+    )
+    (out_dir / "sitemap.xml").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{url_entries}\n"
+        "</urlset>\n",
+        encoding="utf-8",
+    )
+    (out_dir / "robots.txt").write_text(
+        f"User-agent: *\nAllow: /\nSitemap: {base_url}/sitemap.xml\n",
+        encoding="utf-8",
+    )
+    (out_dir / "404.html").write_text(
+        HTML_TEMPLATE.format(
+            title="Page Not Found",
+            version=html.escape(version),
+            nav_links="\n      ".join(
+                f'<a href="{h}">{html.escape(lbl)}</a>' for _, h, lbl in PAGES
+            ),
+            body_html="<h1>404 — Page Not Found</h1><p>Return to the <a href=\"index.html\">nxtflow documentation home</a>.</p>",
+            toc_html="",
+        ),
+        encoding="utf-8",
+    )
 
     # Disable Jekyll processing
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")

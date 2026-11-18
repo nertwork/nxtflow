@@ -7,6 +7,7 @@
 <p align="center">
   <a href="https://github.com/nertwork/nxtflow/actions/workflows/ci.yml"><img src="https://github.com/nertwork/nxtflow/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/nertwork/nxtflow/releases/latest"><img src="https://img.shields.io/github/v/release/nertwork/nxtflow?color=0a84ff&label=Release" alt="Release" /></a>
+  <a href="https://nertwork.github.io/nxtflow/"><img src="https://img.shields.io/badge/Docs-nertwork.github.io%2Fnxtflow-38bdf8?logo=githubpages&logoColor=white" alt="Documentation" /></a>
   <a href="https://github.com/nertwork/nxtflow/pkgs/container/nxtflow-enricher"><img src="https://img.shields.io/badge/GHCR-nxtflow--enricher%20%7C%20mcp-38bdf8?logo=docker&logoColor=white" alt="GHCR Containers" /></a>
   <a href="https://github.com/nertwork/nxtflow/pkgs/container/charts%2Fnxtflow"><img src="https://img.shields.io/badge/Helm-oci%3A%2F%2Fghcr.io%2Fnertwork%2Fcharts%2Fnxtflow-0f172a?logo=helm&logoColor=white" alt="Helm OCI Chart" /></a>
   <a href="https://coderabbit.ai"><img src="https://img.shields.io/coderabbit/prs/github/nertwork/nxtflow?utm_source=oss&utm_medium=github&utm_campaign=nertwork%2Fnertwork&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews" alt="CodeRabbit Reviews" /></a>
@@ -132,11 +133,15 @@ Ready-to-use templates live in [`examples/exporters/`](examples/exporters/):
 
 ## Documentation
 
+Full hosted documentation is automatically published to **[`https://nertwork.github.io/nxtflow/`](https://nertwork.github.io/nxtflow/)**:
+
 - [Documentation Home](docs/index.md)
 - [System Architecture](docs/architecture.md)
 - [Standalone vs. Integrated Deployment](docs/standalone-vs-integrated.md)
+- [Helm Chart Reference](charts/nxtflow/README.md)
 - [Exporter Guides & Tuning](docs/exporters.md)
 - [CLI, MCP Server & AI Skill Integration](docs/ai-integration.md)
+- [Changelog](CHANGELOG.md) & [Contributing Guide](CONTRIBUTING.md)
 
 ---
 

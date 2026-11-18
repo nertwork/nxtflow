@@ -26,5 +26,6 @@ Traditional NetFlow stacks either rely on heavy proprietary appliances or explod
 
 - [System Architecture](architecture.md) — Collector pipeline, 7-tier host resolution, Loki JSON schema, and Prometheus metrics.
 - [Standalone vs. Integrated Modes](standalone-vs-integrated.md) — Choosing between bundled stack, existing observability integration, and edge collectors.
+- [Helm Chart Reference](../charts/nxtflow/README.md) — Chart deployment modes, OCI install commands, and configuration values.
 - [Exporter Guides](exporters.md) — Router, firewall, and Linux `softflowd` configuration guides.
 - [CLI, MCP Server & AI Skill](ai-integration.md) — Using `nxtflow`, `nxtflow-mcp`, and `SKILL.md` with AI agents.
