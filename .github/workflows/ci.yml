@@ -84,11 +84,11 @@ jobs:
       - name: Run Helm Schema, Asset & Template Pytest Suite
         run: pytest -v tests/test_helm.py
 
-      - name: Run Helm chart-testing (ct lint)
+      - name: Setup Helm chart-testing (ct)
         uses: helm/chart-testing-action@v2
-        with:
-          command: lint
-          config: ct.yaml
+
+      - name: Run Helm chart-testing (ct lint)
+        run: ct lint --config ct.yaml --all
 
   docker-and-kind:
     name: Docker Build & Kind Helm Install
