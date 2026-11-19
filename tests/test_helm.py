@@ -1,4 +1,4 @@
-"""Comprehensive tests for nxtflow Helm chart, branding assets, dashboard, CI workflows, and Zero-PII audit."""
+"""Comprehensive tests for nxtflow Helm chart, branding assets, dashboard, CI workflows, and security audit."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ CHART_DIR = REPO_ROOT / "charts" / "nxtflow"
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
 
-def _load_zero_pii_module():
-    spec = importlib.util.spec_from_file_location("zero_pii_audit", REPO_ROOT / "scripts" / "zero_pii_audit.py")
+def _load_security_audit_module():
+    spec = importlib.util.spec_from_file_location("security_audit", REPO_ROOT / "scripts" / "security_audit.py")
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -46,19 +46,19 @@ def _render_chart(release: str, *extra_args: str) -> list[dict[str, Any]]:
     return docs
 
 
-def test_zero_pii_audit_clean_and_catches_violations(tmp_path: Path) -> None:
-    mod = _load_zero_pii_module()
+def test_security_audit_clean_and_catches_violations(tmp_path: Path) -> None:
+    mod = _load_security_audit_module()
     assert mod.scan_directory(REPO_ROOT) == []
 
     dirty_dir = tmp_path / "dirty"
     dirty_dir.mkdir()
-    (dirty_dir / "leak1.yaml").write_text("ip: " + "172" + ".28" + ".10.5\n", encoding="utf-8")
-    (dirty_dir / "leak2.md").write_text("host: " + "kube." + "home." + "nert" + "work.com\n", encoding="utf-8")
+    (dirty_dir / "leak1.yaml").write_text("password: " + "Super" + "Secret\n", encoding="utf-8")
+    (dirty_dir / "leak2.pem").write_text("-----BEGIN RSA " + "PRIVATE" + " KEY-----\n", encoding="utf-8")
     (dirty_dir / "leak3.txt").write_text("token: " + "ghp" + "_" + "A" * 24 + "\n", encoding="utf-8")
     hits = mod.scan_directory(dirty_dir)
     assert len(hits) >= 3
-    joined = '\n'.join(hits)
-    for fname in ('leak1.yaml', 'leak2.md', 'leak3.txt'):
+    joined = "\n".join(hits)
+    for fname in ("leak1.yaml", "leak2.pem", "leak3.txt"):
         assert fname in joined
 
     safe_dir = tmp_path / "safe"
@@ -278,7 +278,7 @@ def test_ci_workflow_yaml_and_required_check_names() -> None:
     ci = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
     job_names = {job["name"] for job in ci["jobs"].values()}
     assert {
-        "Zero-PII & Security Audit",
+        "Lint, Syntax & Security Audit",
         "Python Lint & Unit Tests",
         "Helm Lint, Schema & Template",
     } <= job_names
@@ -538,11 +538,8 @@ def test_tier5_helm_subchart_names_ingress_ca_dashboard_ports_and_tags() -> None
     assert d_mcp["spec"]["template"]["spec"]["containers"][0]["image"].endswith(f":{expected_tag}")
 
 
-def test_tier5_zero_pii_patterns_and_sync_gh_pages_anchors(tmp_path: Path) -> None:
-    spec_pii = importlib.util.spec_from_file_location("zero_pii_audit", REPO_ROOT / "scripts" / "zero_pii_audit.py")
-    assert spec_pii is not None and spec_pii.loader is not None
-    mod_pii = importlib.util.module_from_spec(spec_pii)
-    spec_pii.loader.exec_module(mod_pii)
+def test_tier5_security_audit_patterns_and_sync_gh_pages_anchors(tmp_path: Path) -> None:
+    mod_sec = _load_security_audit_module()
 
     dirty_dir = tmp_path / "dirty"
     dirty_dir.mkdir()
@@ -554,7 +551,7 @@ def test_tier5_zero_pii_patterns_and_sync_gh_pages_anchors(tmp_path: Path) -> No
         ]
     )
     (dirty_dir / "leak.txt").write_text(sample, encoding="utf-8")
-    hits = mod_pii.scan_directory(dirty_dir)
+    hits = mod_sec.scan_directory(dirty_dir)
     assert len(hits) == 3
 
     spec_gh = importlib.util.spec_from_file_location("sync_gh_pages", REPO_ROOT / ".github" / "scripts" / "sync_gh_pages.py")

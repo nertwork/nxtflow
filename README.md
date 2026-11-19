@@ -14,7 +14,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-9ece6a.svg" alt="License: MIT" /></a>
 </p>
 
-**`nxtflow`** is an open-source, Kubernetes-native **NetFlow v5/v9, IPFIX, and sFlow** observability and AI-analysis platform. It pairs upstream [`netsampler/goflow2`](https://github.com/netsampler/goflow2) with a lightweight Python enricher (`nxtflow-enricher`), bounded-cardinality Grafana Loki storage, a 18-panel Grafana dashboard, a terminal CLI (`nxtflow`), and a read-only FastMCP server (`nxtflow-mcp`) so both humans and AI coding agents can query network traffic history in seconds.
+**`nxtflow`** is an open-source, Kubernetes-native **NetFlow v5/v9, IPFIX, and sFlow** observability and AI-analysis platform. It pairs upstream [`netsampler/goflow2`](https://github.com/netsampler/goflow2) with a lightweight Python enricher (`nxtflow-enricher`), bounded-cardinality Grafana Loki storage, an 18-panel Grafana dashboard, a terminal CLI (`nxtflow`), and a read-only FastMCP server (`nxtflow-mcp`) so both engineers and AI coding assistants can query network traffic history in seconds.
 
 ---
 
@@ -90,6 +90,34 @@ helm install nxtflow-edge oci://ghcr.io/nertwork/charts/nxtflow \
 
 ---
 
+## Customizing Site & Exporter Labels
+
+Every enriched flow record is tagged with bounded Loki stream labels `{job, site, dir}` so you can aggregate and filter multi-site traffic without cardinality explosion:
+
+1. **Site Label (`collector.site`):** Set a unique `collector.site` (for example `"us-east"`, `"branch-west"`, or `"lab"`) on each Helm release. New sites automatically appear in the Grafana `Site` dropdown and `nxtflow status`.
+2. **Direction Classification (`enricher.classification`):** Configure `localCidrs` (your internal subnets) and `wanIps` (your router public/WAN IPs) so traffic is accurately tagged as `up`, `down`, or `lan`.
+3. **Host & Service Aliases (`enricher.resolution`):** Map key IPs in `staticHosts` (such as `"192.168.1.1": "core-router"`), name internal subnets in `internalCidrs`, or enable `enricher.netbox.enabled=true` to sync IPAM hostnames automatically.
+
+---
+
+## Configuration & Environment Variables
+
+The `nxtflow` CLI and `nxtflow-mcp` resolve settings in order: built-in defaults -> `~/.config/nxtflow/config.yaml` (or `--config` / `NXTFLOW_CONFIG_FILE`) -> environment variables:
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `NXTFLOW_LOKI_URL` | `http://localhost:3100` | Base URL for the target Loki API |
+| `NXTFLOW_JOB` | `nxtflow` | Loki `job` label to query (`collector.job`) |
+| `NXTFLOW_TLS_VERIFY` | `true` | `true`, `false`, or path to a custom CA bundle |
+| `NXTFLOW_LOKI_TOKEN` | `""` | Optional Bearer token for authenticated Loki |
+| `NXTFLOW_LOKI_USER` / `NXTFLOW_LOKI_PASSWORD` | `""` | Optional Basic auth credentials for Loki |
+| `NXTFLOW_LOKI_TENANT_ID` | `""` | Optional `X-Scope-OrgID` multi-tenant header |
+| `NXTFLOW_EXCLUDED_HOSTS` | `multicast,link-local` | Comma-separated hostnames excluded from top-N views |
+
+See [CLI, MCP Server & AI Skill Integration](docs/ai-integration.md) and [`charts/nxtflow/values.yaml`](charts/nxtflow/values.yaml) for the complete reference.
+
+---
+
 ## CLI & MCP Quick Start
 
 Install the Python package locally (with MCP server support):
@@ -131,6 +159,32 @@ Ready-to-use templates live in [`examples/exporters/`](examples/exporters/):
 
 ---
 
+## Testing & Verification
+
+Run the local audit, linter, Helm checks, and unit test suite before opening a pull request:
+
+```bash
+python3 scripts/security_audit.py
+ruff check src tests scripts .github/scripts
+helm lint charts/nxtflow
+pytest -v
+```
+
+---
+
+## Security & CI/CD Quality
+
+Every push and pull request runs automated GitHub Actions verification:
+
+- **Lint, Syntax & Security Audit:** `scripts/security_audit.py` scans repository files for exposed API tokens, private keys, webhook URLs, and Python/JSON syntax issues.
+- **Python Lint & Unit Tests:** `ruff` static checks and `pytest` coverage across CLI, enricher, and MCP tools.
+- **Helm Lint, Schema & Template:** `helm lint`, JSON Schema validation (`values.schema.json`), `ct lint`, and multi-mode template rendering tests.
+- **Docker Build & Kind Helm Install:** Builds container images and executes an end-to-end `helm install` + `helm test` inside an ephemeral Kind cluster.
+
+See [SECURITY.md](SECURITY.md) for architecture details and private vulnerability reporting.
+
+---
+
 ## Documentation
 
 Full hosted documentation is automatically published to **[`https://nertwork.github.io/nxtflow/`](https://nertwork.github.io/nxtflow/)**:
@@ -143,12 +197,6 @@ Full hosted documentation is automatically published to **[`https://nertwork.git
 - [CLI, MCP Server & AI Skill Integration](docs/ai-integration.md)
 - [Changelog](CHANGELOG.md) & [Contributing Guide](CONTRIBUTING.md)
 
----
+## Contributing & License
 
-## Security & Zero-PII Guarantee
-
-Every commit runs `scripts/zero_pii_audit.py` in CI to verify zero internal IP addresses, private hostnames, or credentials enter the repository. See [SECURITY.md](SECURITY.md) for architecture details and vulnerability reporting.
-
-## License
-
-Released under the [MIT License](LICENSE).
+Contributions are welcome! Please review [CONTRIBUTING.md](CONTRIBUTING.md) before submitting a pull request. Released under the [MIT License](LICENSE).

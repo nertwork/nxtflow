@@ -649,7 +649,7 @@ def test_tier5_config_env_overrides_and_kubectl_errors(tmp_path: Path, monkeypat
     monkeypatch.setenv("NXTFLOW_LOKI_TENANT_ID", "tid")
     monkeypatch.setenv("NXTFLOW_TLS_VERIFY", "false")
     monkeypatch.setenv("NXTFLOW_USE_KUBECTL", "1")
-    monkeypatch.setenv("NXTFLOW_KUBE_CONTEXT", "home1")
+    monkeypatch.setenv("NXTFLOW_KUBE_CONTEXT", "cluster-a")
     monkeypatch.setenv("NXTFLOW_KUBE_NAMESPACE", "netflow")
     monkeypatch.setenv("NXTFLOW_KUBE_TARGET", "deploy/goflow2")
     monkeypatch.setenv("NXTFLOW_CLUSTER_LOKI_URL", "http://loki.ns:3100/")
@@ -663,7 +663,7 @@ def test_tier5_config_env_overrides_and_kubectl_errors(tmp_path: Path, monkeypat
     assert cfg.loki_tenant_id == "tid"
     assert cfg.tls_verify is False
     assert cfg.use_kubectl is True
-    assert cfg.kube_context == "home1"
+    assert cfg.kube_context == "cluster-a"
     assert cfg.kube_namespace == "netflow"
     assert cfg.kube_target == "deploy/goflow2"
     assert cfg.cluster_loki_url == "http://loki.ns:3100"
@@ -671,7 +671,7 @@ def test_tier5_config_env_overrides_and_kubectl_errors(tmp_path: Path, monkeypat
     assert cfg.timeout_seconds == 9.5
     assert cfg.redacted_dict()["loki_token"] == "***"
 
-    client = LokiClient(NxtflowConfig(use_kubectl=True, kube_context="home1"))
+    client = LokiClient(NxtflowConfig(use_kubectl=True, kube_context="cluster-a"))
     with (
         patch("nxtflow.loki.subprocess.run", side_effect=subprocess.TimeoutExpired("kubectl", 1)),
         pytest.raises(LokiError, match="timed out"),
@@ -714,7 +714,7 @@ loki:
   password: nest-pwd
   tenantId: nest-tid
 kube:
-  context: dhc1
+  context: cluster-b
   namespace: netflow-ns
   target: deploy/custom
 excludedHosts:
@@ -731,7 +731,7 @@ timeout_seconds: 0.01
     assert cfg.loki_user == "nest-usr"
     assert cfg.loki_password == "nest-pwd"
     assert cfg.loki_tenant_id == "nest-tid"
-    assert cfg.kube_context == "dhc1"
+    assert cfg.kube_context == "cluster-b"
     assert cfg.kube_namespace == "netflow-ns"
     assert cfg.kube_target == "deploy/custom"
     assert cfg.excluded_hosts == ["multicast"]

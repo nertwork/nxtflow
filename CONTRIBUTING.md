@@ -31,11 +31,11 @@ helm dependency build charts/nxtflow
 ## 2. Running Checks Locally
 
 ```bash
-# 1. Zero-PII & Secret Sanitization Audit
-python3 scripts/zero_pii_audit.py
+# 1. Security, Secret & Syntax Audit
+python3 scripts/security_audit.py
 
 # 2. Python Linter
-ruff check src tests scripts
+ruff check src tests scripts .github/scripts
 
 # 3. Helm Lint (Default + All Example Modes)
 helm lint charts/nxtflow
@@ -49,15 +49,15 @@ pytest -v
 
 ---
 
-## 3. Strict Zero-PII & Security Hygiene Policy
+## 3. Security, Configuration Hygiene & Quality Standards
 
-1. **Zero Personal or Internal Infrastructure Data:**
-   - Never commit private infrastructure IP ranges, internal lab domains, real device hostnames, personal usernames, Slack webhooks, or API tokens.
-   - Always use RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), RFC 3849 (`2001:db8::/32`), generic RFC 1918 examples (`192.168.1.0/24`, `10.0.0.0/8`), and RFC 2606 domains (`example.com`).
-2. **Automated CI Gate:**
-   - Every pull request runs `scripts/zero_pii_audit.py` as a required check and rejects any forbidden patterns.
+1. **Clean Example Fixtures & Secret Hygiene:**
+   - Never commit real credentials, API tokens, private keys, Slack webhooks, or private production endpoints.
+   - Always use RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), RFC 3849 (`2001:db8::/32`), standard RFC 1918 examples (`192.168.1.0/24`, `10.0.0.0/8`), and RFC 2606 domains (`example.com`) in examples and tests.
+2. **Automated CI/CD Verification:**
+   - Every pull request runs **Lint, Syntax & Security Audit** (`scripts/security_audit.py`), **Python Lint & Unit Tests** (`ruff` + `pytest`), **Helm Lint, Schema & Template** (`helm lint`, `ct lint`, `tests/test_helm.py`), and **Docker Build & Kind Helm Install** (`kind` + `helm test`).
 3. **Read-Only AI Guardrails:**
-   - Keep `nxtflow-mcp` strictly read-only, preserve `validate_range()` (`30d` cap), `clamp_limit()`, and LogQL escaping helpers in `src/nxtflow/config.py`.
+   - Keep `nxtflow-mcp` strictly read-only, and preserve `validate_range()` (`30d` cap), `clamp_limit()`, and LogQL escaping helpers in `src/nxtflow/config.py`.
 
 ---
 
@@ -65,5 +65,5 @@ pytest -v
 
 1. Create a feature or fix branch from `main`.
 2. Add or update unit/Helm tests under `tests/`.
-3. Run `python3 scripts/zero_pii_audit.py`, `ruff check src tests scripts`, `helm lint charts/nxtflow`, and `pytest -v`.
+3. Run `python3 scripts/security_audit.py`, `ruff check src tests scripts .github/scripts`, `helm lint charts/nxtflow`, and `pytest -v`.
 4. Open a Pull Request targeting `main`.

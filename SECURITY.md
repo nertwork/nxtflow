@@ -12,7 +12,7 @@
 - **LogQL Injection Prevention:** All user-supplied `site`, `dir`, `search`, and `host` inputs in `nxtflow` CLI and `nxtflow-mcp` pass through `validate_range()`, `validate_dir()`, `escape_logql_label()`, and `sanitize_logql_regex()`.
 - **Bounded Memory & Query Cardinality:** Enricher queues use bounded ring buffers (`ringBufferMaxFlows`), rDNS uses a bounded LRU+TTL cache (`maxEntries`), Loki streams use strictly bounded labels (`{job, site, dir}`), and ephemeral ports (`>=10000`) are filtered from `top-ports` aggregations to prevent 5000-series exhaustion.
 - **Secret Isolation:** Loki and NetBox credentials are injected via Kubernetes `Secret` environment variables (`NXTFLOW_LOKI_*`, `NXTFLOW_NETBOX_TOKEN`), never rendered into ConfigMaps, and redacted by `nxtflow config`.
-- **Zero-PII Gate:** CI enforces `scripts/zero_pii_audit.py` across all source, chart, SVG, workflow, and documentation files.
+- **Automated Security & Static Analysis:** CI runs `scripts/security_audit.py` across all source, chart, SVG, workflow, and documentation files to catch exposed credentials, private keys, and syntax errors alongside Ruff linting and Helm schema validation.
 
 ## Reporting a Vulnerability
 

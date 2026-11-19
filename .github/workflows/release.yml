@@ -20,8 +20,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Run Zero-PII Audit
-        run: python3 scripts/zero_pii_audit.py
+      - name: Run Security & Syntax Audit
+        run: python3 scripts/security_audit.py
 
       - name: Determine Release Version
         id: vars

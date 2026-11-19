@@ -104,12 +104,12 @@ def escape_logql_label(value: str) -> str:
 
 
 def escape_logql_backtick(value: str) -> str:
-    """Sanitize a string for safe inclusion inside LogQL backtick raw literals."""
+    """Escape a string for safe inclusion inside LogQL backtick raw literals."""
     return str(value).replace("`", "").replace("\r", "").replace("\n", "").replace("\x00", "")
 
 
 def sanitize_logql_regex(value: str) -> str:
-    """Sanitize and regex-escape a search/host term for safe LogQL |~ `...` matching."""
+    """Escape and regex-quote a search/host term for safe LogQL |~ `...` matching."""
     cleaned = escape_logql_backtick(value).strip()
     if not cleaned:
         raise ValueError("Search or host filter term cannot be empty")

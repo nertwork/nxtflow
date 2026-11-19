@@ -1,4 +1,4 @@
-"""Zero-PII public DNS, domain suffix, CIDR, and IANA protocol defaults for nxtflow."""
+"""Public DNS, domain suffix, CIDR, and IANA protocol defaults for nxtflow."""
 
 from __future__ import annotations
 

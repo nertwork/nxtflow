@@ -1449,7 +1449,7 @@ def test_tier5_enricher_env_http_edges_and_shipper_auth(tmp_path: Path, monkeypa
     assert _parse_bool("off") is False
     assert _parse_bool("unknown", default=True) is True
 
-    monkeypatch.setenv("NXTFLOW_SITE", "dhc1")
+    monkeypatch.setenv("NXTFLOW_SITE", "site-west")
     monkeypatch.setenv("NXTFLOW_JOB", "netflow")
     monkeypatch.setenv("NXTFLOW_HTTP_LISTEN", "127.0.0.1:0")
     monkeypatch.setenv("NXTFLOW_METRICS_LISTEN", "127.0.0.1:0")
@@ -1464,7 +1464,7 @@ def test_tier5_enricher_env_http_edges_and_shipper_auth(tmp_path: Path, monkeypa
     monkeypatch.setenv("NXTFLOW_NETBOX_TOKEN", "nbtok")
     monkeypatch.setenv("NXTFLOW_NETBOX_TLS_VERIFY", "false")
     env_cfg = load_enricher_config()
-    assert env_cfg.site == "dhc1"
+    assert env_cfg.site == "site-west"
     assert env_cfg.stdin_enabled is True and env_cfg.file_enabled is False
     assert env_cfg.loki_tenant_id == "t1"
     assert env_cfg.loki_username == "u1"
@@ -1527,7 +1527,7 @@ def test_tier5_enricher_yaml_sections_and_main_lifecycle(
     full_yaml.write_text(
         f"""
 collector:
-  site: dhc1
+  site: site-west
   job: custom-job
   includeSamplerLabel: true
 ingest:
@@ -1598,7 +1598,7 @@ shipper:
         encoding="utf-8",
     )
     cfg = load_enricher_config(config_file=full_yaml)
-    assert cfg.site == "dhc1"
+    assert cfg.site == "site-west"
     assert cfg.job == "custom-job"
     assert cfg.services == {"198.51.100.20": "Edge-Svc"}
     assert cfg.rdns_private is True
