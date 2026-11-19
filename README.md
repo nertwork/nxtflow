@@ -11,6 +11,7 @@
   <a href="https://github.com/nertwork/nxtflow/pkgs/container/nxtflow-enricher"><img src="https://img.shields.io/badge/GHCR-nxtflow--enricher%20%7C%20mcp-38bdf8?logo=docker&logoColor=white" alt="GHCR Containers" /></a>
   <a href="https://github.com/nertwork/nxtflow/pkgs/container/charts%2Fnxtflow"><img src="https://img.shields.io/badge/Helm-oci%3A%2F%2Fghcr.io%2Fnertwork%2Fcharts%2Fnxtflow-0f172a?logo=helm&logoColor=white" alt="Helm OCI Chart" /></a>
   <a href="https://coderabbit.ai"><img src="https://img.shields.io/coderabbit/prs/github/nertwork/nxtflow?utm_source=oss&utm_medium=github&utm_campaign=nertwork%2Fnertwork&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews" alt="CodeRabbit Reviews" /></a>
+  <a href="https://github.com/nertwork/nxtflow/graphs/contributors"><img src="https://img.shields.io/github/contributors/nertwork/nxtflow?color=0a84ff&label=Contributors" alt="Contributors" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-9ece6a.svg" alt="License: MIT" /></a>
 </p>
 
@@ -196,6 +197,14 @@ Full hosted documentation is automatically published to **[`https://nertwork.git
 - [Exporter Guides & Tuning](docs/exporters.md)
 - [CLI, MCP Server & AI Skill Integration](docs/ai-integration.md)
 - [Changelog](CHANGELOG.md) & [Contributing Guide](CONTRIBUTING.md)
+
+## Community & Contributors
+
+Thank you to everyone contributing code, exporter guides, bug reports, and platform improvements to **nxtflow**!
+
+- **[@nertwork](https://github.com/nertwork) (James Farr Gomez)** — Creator & Maintainer (Helm chart architecture, `nxtflow-enricher`, bounded-cardinality Loki pipeline, 18-panel Grafana dashboard, `nxtflow` CLI & FastMCP server).
+
+See the full **[GitHub Contributors Graph](https://github.com/nertwork/nxtflow/graphs/contributors)** and our **[Contributing Guide](CONTRIBUTING.md)** to get involved.
 
 ## Contributing & License
 
