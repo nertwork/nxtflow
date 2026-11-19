@@ -17,7 +17,7 @@ The `charts/nxtflow` Helm chart supports three deployment topologies controlled 
 
 ## 1. Standalone Mode
 
-Standalone mode is ideal for homelabs, test clusters, or dedicated monitoring namespaces without an existing observability stack:
+Standalone mode is ideal for personal labs, test clusters, or dedicated monitoring namespaces without an existing observability stack:
 
 ```bash
 helm install nxtflow oci://ghcr.io/nertwork/charts/nxtflow \

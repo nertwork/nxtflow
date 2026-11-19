@@ -29,3 +29,12 @@ Traditional NetFlow stacks either rely on heavy proprietary appliances or explod
 - [Helm Chart Reference](../charts/nxtflow/README.md) — Chart deployment modes, OCI install commands, and configuration values.
 - [Exporter Guides](exporters.md) — Router, firewall, and Linux `softflowd` configuration guides.
 - [CLI, MCP Server & AI Skill](ai-integration.md) — Using `nxtflow`, `nxtflow-mcp`, and `SKILL.md` with AI agents.
+- [Changelog](../CHANGELOG.md) — Release history and component highlights.
+
+## Quality & Automated Verification
+
+Every release and pull request is validated through automated GitHub Actions checks:
+
+- **Lint, Syntax & Security Audit:** Automated credential, private key, and Python/JSON syntax checks (`scripts/security_audit.py`).
+- **Python Lint & Unit Tests:** `ruff` checks and `pytest` suites covering the CLI, enricher, and MCP server.
+- **Helm Lint, Schema & Template:** Multi-mode `helm lint`, `values.schema.json` validation, `ct lint`, and Kind cluster `helm test` smoke tests.

@@ -29,7 +29,7 @@ reviews:
     - label: "helm"
       instructions: "Apply when files under charts/nxtflow/ or examples/values-*.yaml are modified."
     - label: "security"
-      instructions: "Apply when TLS verification, auth Secret handling, or Zero-PII rules are modified."
+      instructions: "Apply when TLS verification, auth Secret handling, or security audit rules are modified."
     - label: "documentation"
       instructions: "Apply when README.md, CHANGELOG.md, CONTRIBUTING.md, or docs/** are modified."
     - label: "ci/cd"
@@ -47,7 +47,7 @@ reviews:
         Review Helm chart templates and values for:
         1. Dual-mode compatibility (tags.standalone=true vs tags.standalone=false with loki.externalUrl).
         2. Exact YAML key alignment with src/nxtflow/enricher/app.py.
-        3. Non-root security contexts (fsGroup 65533 for goflow2/enricher, 65532 for mcp) and Zero-PII defaults.
+        3. Non-root security contexts (fsGroup 65533 for goflow2/enricher, 65532 for mcp) and safe default configurations.
     - path: "tests/**/*.py"
       instructions: |
         Ensure tests are deterministic, offline-safe, and use only RFC 5737 / RFC 1918 / RFC 2606 fixtures.

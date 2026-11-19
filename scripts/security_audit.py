@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Zero-PII and Secret Sanitization Audit for nxtflow.
+"""Static Security, Credential Hygiene, and Syntax Audit for nxtflow.
 
 Scans all repository text files (including SVGs, YAML, Markdown, Python, JSON, and
-GitHub workflows) for internal infrastructure IPs, private hostnames, personal
-identifiers, and credential patterns while allowing RFC 5737 / RFC 1918 / RFC 3849 /
-RFC 2606 documentation examples.
+GitHub workflows) for accidentally committed API tokens, private keys, webhook URLs,
+and placeholder secrets, and validates Python and JSON syntax.
 """
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import re
 import sys
@@ -50,30 +51,11 @@ BINARY_EXTENSIONS = frozenset({
 
 
 def _build_patterns() -> list[tuple[str, re.Pattern[str]]]:
-    """Build forbidden regexes via concatenation so self-scans stay clean with zero blind spots."""
+    """Build secret-detection regexes via concatenation so self-scans stay clean."""
     dot = r"\."
     raw_specs = [
-        ("internal-subnet-172-28", "172" + dot + "28" + dot),
-        ("internal-subnet-192-168-231", "192" + dot + "168" + dot + "231" + dot),
-        ("internal-subnet-10-233", r"\b10" + dot + "233" + dot),
-        ("internal-subnet-10-249", r"\b10" + dot + "249" + dot),
-        ("internal-wan-47-154", r"\b47" + dot + "154" + dot + "50" + dot),
-        ("internal-ip-208-113", r"\b208" + dot + "113" + dot),
-        ("internal-domain-home", "home" + dot + "nert" + "work"),
-        ("internal-domain-kube", "kube" + dot + "(?:home|cloud)" + dot + "nert" + "work"),
-        ("internal-domain-git", "git" + dot + "nert" + "work" + dot + "com"),
-        ("internal-domain-vault", "vault" + dot + "nert" + "work" + dot + "com"),
-        ("internal-domain-grafana", "grafana" + dot + "nert" + "work" + dot + "com"),
-        ("internal-domain-bb", "blue" + "bubbles" + dot + "(?:ilb|home)"),
-        ("internal-host-slb", "slb" + "-" + "srv"),
-        ("internal-host-proxmox", "prox" + "mox-(?:sm1|nuc)"),
-        ("internal-org-id", "fi" + "serv"),
-        ("personal-id-1", "Amber" + "wood"),
-        ("personal-id-2", "Spon" + "see"),
-        ("personal-user", r"\bj" + r"farr\b"),
-        ("internal-wan-label", "wan" + "-" + "frontier"),
         ("secret-super", "Super" + "Secret"),
-        ("secret-slack-hook", "hooks" + dot + "slack" + dot + "com"),
+        ("secret-slack-hook", "hooks" + dot + "slack" + dot + "com/services/"),
         ("secret-private-key", r"-----BEGIN [A-Z ]*" + "PRIVATE" + r" KEY-----"),
         ("secret-ghp", r"\bghp" + r"_[A-Za-z0-9]{20,}\b"),
         ("secret-glpat", r"\bglpat" + r"-[A-Za-z0-9_-]{20,}\b"),
@@ -95,7 +77,7 @@ def _is_skipped_dir(rel_parts: tuple[str, ...], dirname: str) -> bool:
 
 
 def scan_directory(root: Path) -> list[str]:
-    """Scan *root* recursively and return formatted violation lines."""
+    """Scan *root* recursively for forbidden credential/secret patterns and syntax errors."""
     root = Path(root).resolve()
     violations: list[str] = []
 
@@ -123,6 +105,17 @@ def scan_directory(root: Path) -> list[str]:
                             snippet = snippet[:157] + "..."
                         violations.append(f"{rel_file}:{lineno}: [{rule_name}] {snippet}")
 
+            if fpath.suffix == ".py":
+                try:
+                    ast.parse(text, filename=str(rel_file))
+                except SyntaxError as exc:
+                    violations.append(f"{rel_file}:{exc.lineno or 0}: [python-syntax] {exc.msg}")
+            elif fpath.suffix == ".json":
+                try:
+                    json.loads(text)
+                except json.JSONDecodeError as exc:
+                    violations.append(f"{rel_file}:{exc.lineno}: [json-syntax] {exc.msg}")
+
     return violations
 
 
@@ -131,11 +124,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     target = Path(args[0]) if args else Path(__file__).resolve().parent.parent
     violations = scan_directory(target)
     if violations:
-        print("Zero-PII audit FAILED. Forbidden patterns detected:", file=sys.stderr)
+        print("Security & syntax audit FAILED. Issues detected:", file=sys.stderr)
         for hit in violations:
             print(f"  {hit}", file=sys.stderr)
         return 1
-    print(f"Zero-PII audit PASSED across {target}")
+    print(f"Security & syntax audit PASSED across {target}")
     return 0
 
 

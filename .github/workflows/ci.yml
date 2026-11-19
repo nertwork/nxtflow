@@ -10,15 +10,15 @@ permissions:
   contents: read
 
 jobs:
-  zero-pii-audit:
-    name: Zero-PII & Security Audit
+  lint-and-security-audit:
+    name: Lint, Syntax & Security Audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v7
 
-      - name: Run Zero-PII & Secret Sanitization Audit
-        run: python3 scripts/zero_pii_audit.py
+      - name: Run Security, Secret & Syntax Audit
+        run: python3 scripts/security_audit.py
 
   python-lint-and-tests:
     name: Python Lint & Unit Tests
@@ -94,7 +94,7 @@ jobs:
     name: Docker Build & Kind Helm Install
     runs-on: ubuntu-latest
     needs:
-      - zero-pii-audit
+      - lint-and-security-audit
       - python-lint-and-tests
       - helm-lint-and-template
     steps:

@@ -21,6 +21,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dual-Mode Helm Chart (`charts/nxtflow`) & Grafana Dashboard**:
   - Supports `standalone` (bundled Loki 21.3.1, Prometheus 29.47.2, Grafana 14.5.0), `integrated` (external Loki + `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMap), and `collector-only` edge deployments.
   - Multi-site 18-panel Grafana dashboard (`nxtflow-overview.json`) with dynamic `site` discovery, bipartite ECharts Sankey (plus optional `netsage-sankey-panel`), and configurable excluded hosts.
-- **CI/CD, Branding & Zero-PII Gate**:
+- **CI/CD, Branding & Security Gate**:
   - Vector and PNG branding assets (`assets/nxtflow-icon.*`, `assets/nxtflow-logo.*`).
-  - Automated Zero-PII audit (`scripts/zero_pii_audit.py`), GitHub Actions CI/Release/Pages workflows, and Helm/Python test suites.
+  - Automated security, credential, and syntax audit (`scripts/security_audit.py`), GitHub Actions CI/Release/Pages workflows, and Helm/Python test suites.
