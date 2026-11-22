@@ -1,0 +1,76 @@
+collector:
+  site: "default"
+  job: "nxtflow"
+  includeSamplerLabel: false
+
+ingest:
+  http:
+    enabled: true
+    listenAddr: "0.0.0.0:8081"
+    maxBodyBytes: 10485760
+  file:
+    enabled: true
+    path: "/var/log/goflow2/raw.jsonl"
+    pollIntervalSeconds: 0.2
+    positionFile: "/tmp/nxtflow-enricher.pos"
+    truncateAtBytes: 52428800
+  stdin:
+    enabled: false
+
+metrics:
+  listenAddr: "0.0.0.0:9090"
+
+sampling:
+  respectSamplingRate: true
+  defaultSamplingRate: 1
+
+classification:
+  localCidrs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+    - "fc00::/7"
+  wanIps: []
+  internalCidrs: []
+  excludedHosts:
+    - "multicast"
+    - "link-local"
+
+resolution:
+  staticHosts: {}
+  services: {}
+  extraCidrs: []
+  useDefaultCidrs: true
+  rdns:
+    enabled: true
+    private: false
+    timeoutSeconds: 1.5
+    maxEntries: 10000
+    ttlSeconds: 3600
+    negativeTtlSeconds: 300
+
+netbox:
+  enabled: false
+  url: ""
+  tlsVerify: true
+  syncIntervalSeconds: 300
+  timeoutSeconds: 10
+  stripDomain: false
+
+shipper:
+  mode: "direct"
+  loki:
+    url: "http://loki:3100"
+    tenantId: ""
+    tlsVerify: true
+    caFile: ""
+    timeoutSeconds: 10.0
+    batchMaxEntries: 500
+    batchMaxWaitSeconds: 1.0
+    ringBufferMaxFlows: 50000
+    maxRetries: 5
+    initialBackoffSeconds: 0.5
+    maxBackoffSeconds: 15.0
+  file:
+    path: "/var/log/nxtflow/flows.jsonl"
+    truncateAtBytes: 52428800

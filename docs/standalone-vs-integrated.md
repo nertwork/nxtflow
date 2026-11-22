@@ -15,6 +15,18 @@ The `charts/nxtflow` Helm chart supports three deployment topologies controlled 
 | `nxtflow-mcp` Server | Enabled | Enabled | Disabled |
 | Example Values File | `examples/values-standalone.yaml` | `examples/values-integrated.yaml` | `examples/values-collector-only.yaml` |
 
+## 0. Docker Compose (Single-Host / Homelab)
+
+For single-host Docker setups without Kubernetes, use the root `docker-compose.yml` and `.env.example`:
+
+```bash
+cp .env.example .env
+./scripts/up.sh --demo
+./scripts/verify-stack.sh
+```
+
+All host ports (`NXTFLOW_GRAFANA_PORT`, `NXTFLOW_LOKI_PORT`, `NXTFLOW_NETFLOW_PORT`, `NXTFLOW_SFLOW_PORT`, `NXTFLOW_PROMETHEUS_PORT`, `NXTFLOW_MCP_PORT`), `NXTFLOW_SITE`, `NXTFLOW_LOKI_RETENTION`, and Grafana admin credentials are configured in `.env`. Grafana automatically provisions the `Loki` and `Prometheus` datasources alongside `nxtflow-overview.json`.
+
 ## 1. Standalone Mode
 
 Standalone mode is ideal for personal labs, test clusters, or dedicated monitoring namespaces without an existing observability stack:

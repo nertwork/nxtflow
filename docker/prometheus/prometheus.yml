@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "nxtflow-enricher"
+    static_configs:
+      - targets: ["enricher:9090"]
+        labels:
+          service: "nxtflow-metrics"
+
+  - job_name: "nxtflow-goflow2"
+    static_configs:
+      - targets: ["goflow2:8080"]
+        labels:
+          service: "nxtflow-goflow2"

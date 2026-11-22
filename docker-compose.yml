@@ -1,0 +1,235 @@
+name: nxtflow
+
+services:
+  init-volumes:
+    image: busybox:1.37
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /var/log/goflow2 /loki/chunks /loki/rules /loki/compactor /prometheus /var/lib/grafana/dashboards
+        chown -R 100:65533 /var/log/goflow2
+        chmod 0775 /var/log/goflow2
+        chown -R 10001:10001 /loki
+        chown -R 65534:65534 /prometheus
+        chown -R 472:0 /var/lib/grafana
+    volumes:
+      - goflow2-buffer:/var/log/goflow2
+      - loki-data:/loki
+      - prometheus-data:/prometheus
+      - grafana-data:/var/lib/grafana
+    networks:
+      - nxtflow
+
+  loki:
+    image: grafana/loki:3.7.10
+    restart: unless-stopped
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    command:
+      - -config.file=/etc/loki/local-config.yaml
+      - -config.expand-env=true
+    environment:
+      NXTFLOW_LOKI_RETENTION: ${NXTFLOW_LOKI_RETENTION:-168h}
+    volumes:
+      - ./docker/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_LOKI_PORT:-3100}:3100"
+    networks:
+      - nxtflow
+
+  prometheus:
+    image: quay.io/prometheus/prometheus:v3.16.0
+    restart: unless-stopped
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_PROMETHEUS_PORT:-9091}:9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9090/-/ready >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - nxtflow
+
+  goflow2:
+    image: netsampler/goflow2:v2.2.7
+    restart: unless-stopped
+    user: "100:65533"
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    command:
+      - "-listen=sflow://:6343,netflow://:2055"
+      - "-format=json"
+      - "-addr=:8080"
+      - "-transport=file"
+      - "-transport.file=/var/log/goflow2/raw.jsonl"
+    volumes:
+      - goflow2-buffer:/var/log/goflow2
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_NETFLOW_PORT:-2055}:2055/udp"
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_SFLOW_PORT:-6343}:6343/udp"
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_GOFLOW2_METRICS_PORT:-8080}:8080/tcp"
+    networks:
+      - nxtflow
+
+  enricher:
+    image: ghcr.io/nertwork/nxtflow-enricher:${NXTFLOW_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.enricher
+    restart: unless-stopped
+    user: "100:65533"
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      loki:
+        condition: service_started
+    command:
+      - "--config"
+      - "/etc/nxtflow/enricher.yaml"
+    environment:
+      NXTFLOW_CONFIG_FILE: /etc/nxtflow/enricher.yaml
+      NXTFLOW_SITE: ${NXTFLOW_SITE:-default}
+      NXTFLOW_JOB: ${NXTFLOW_JOB:-nxtflow}
+      NXTFLOW_LOG_LEVEL: ${NXTFLOW_LOG_LEVEL:-INFO}
+      NXTFLOW_LOKI_URL: http://loki:3100
+      NXTFLOW_NETBOX_ENABLED: ${NXTFLOW_NETBOX_ENABLED:-false}
+      NXTFLOW_NETBOX_URL: ${NXTFLOW_NETBOX_URL:-}
+      NXTFLOW_NETBOX_TOKEN: ${NXTFLOW_NETBOX_TOKEN:-}
+      NXTFLOW_NETBOX_TLS_VERIFY: ${NXTFLOW_NETBOX_TLS_VERIFY:-true}
+    volumes:
+      - ./docker/enricher/enricher.yaml:/etc/nxtflow/enricher.yaml:ro
+      - goflow2-buffer:/var/log/goflow2
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_ENRICHER_HTTP_PORT:-8081}:8081/tcp"
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_ENRICHER_METRICS_PORT:-9090}:9090/tcp"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/readyz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - nxtflow
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    restart: unless-stopped
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      loki:
+        condition: service_started
+      prometheus:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/etc/grafana/nxtflow-entrypoint.sh"]
+    environment:
+      GF_SERVER_HTTP_PORT: ${NXTFLOW_GRAFANA_PORT:-3000}
+      GF_SECURITY_ADMIN_USER: ${NXTFLOW_GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${NXTFLOW_GRAFANA_ADMIN_PASSWORD:-nxtflow}
+      GF_AUTH_ANONYMOUS_ENABLED: ${NXTFLOW_GRAFANA_ANONYMOUS_ENABLED:-false}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: volkovlabs-echarts-panel
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/nxtflow-overview.json
+      NXTFLOW_JOB: ${NXTFLOW_JOB:-nxtflow}
+    volumes:
+      - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./docker/grafana/entrypoint.sh:/etc/grafana/nxtflow-entrypoint.sh:ro
+      - ./charts/nxtflow/files/dashboards/nxtflow-overview.json:/etc/grafana/dashboards-src/nxtflow-overview.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_GRAFANA_PORT:-3000}:${NXTFLOW_GRAFANA_PORT:-3000}"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${NXTFLOW_GRAFANA_PORT:-3000}/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - nxtflow
+
+  nxtflow-mcp:
+    image: ghcr.io/nertwork/nxtflow-mcp:${NXTFLOW_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_started
+    command:
+      - "--transport"
+      - "streamable-http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "${NXTFLOW_MCP_PORT:-8000}"
+      - "--stateless-http"
+    environment:
+      NXTFLOW_LOKI_URL: http://loki:3100
+      NXTFLOW_JOB: ${NXTFLOW_JOB:-nxtflow}
+      NXTFLOW_MCP_PORT: ${NXTFLOW_MCP_PORT:-8000}
+      NXTFLOW_TLS_VERIFY: "true"
+      NXTFLOW_EXCLUDED_HOSTS: "multicast,link-local"
+    ports:
+      - "${NXTFLOW_BIND_IP:-0.0.0.0}:${NXTFLOW_MCP_PORT:-8000}:${NXTFLOW_MCP_PORT:-8000}"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${NXTFLOW_MCP_PORT:-8000}/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - nxtflow
+
+  demo-generator:
+    image: ghcr.io/nertwork/nxtflow-enricher:${NXTFLOW_IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.enricher
+    profiles: ["demo"]
+    restart: unless-stopped
+    depends_on:
+      goflow2:
+        condition: service_started
+      enricher:
+        condition: service_healthy
+    entrypoint: ["python3", "/opt/nxtflow/demo-flows.py"]
+    environment:
+      NXTFLOW_DEMO_HOST: goflow2
+      NXTFLOW_DEMO_PORT: "2055"
+      NXTFLOW_DEMO_PROTOCOL: ${NXTFLOW_DEMO_PROTOCOL:-netflow9}
+      NXTFLOW_DEMO_INTERVAL: ${NXTFLOW_DEMO_INTERVAL:-2}
+      NXTFLOW_DEMO_BATCH_SIZE: ${NXTFLOW_DEMO_BATCH_SIZE:-12}
+    volumes:
+      - ./scripts/demo-flows.py:/opt/nxtflow/demo-flows.py:ro
+    networks:
+      - nxtflow
+
+volumes:
+  goflow2-buffer:
+  loki-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  nxtflow:
+    name: nxtflow

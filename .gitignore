@@ -19,3 +19,6 @@ charts/*/charts/*.tgz
 _site/
 .DS_Store
 *.swp
+
+# Local Docker Compose environment overrides
+.env

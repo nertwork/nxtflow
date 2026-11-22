@@ -46,6 +46,36 @@ flowchart LR
 
 ---
 
+## Quick Start (Docker Compose)
+
+Run the full standalone stack (**GoFlow2 + `nxtflow-enricher` + Loki + Prometheus + Grafana + `nxtflow-mcp`**) locally or on any Docker host in three commands:
+
+```bash
+cp .env.example .env
+# Edit .env if needed (e.g. NXTFLOW_GRAFANA_PORT=3030 if port 3000 is already in use)
+./scripts/up.sh
+```
+
+Or enable the synthetic NetFlow v9 traffic generator (`--profile demo`) and verify the full pipeline end-to-end before pointing a physical router at UDP `:2055` / `:6343`:
+
+```bash
+./scripts/up.sh --demo        # or: docker compose --profile demo up -d
+./scripts/verify-stack.sh     # checks health endpoints, Grafana provisioning, and Loki flow ingestion
+```
+
+Once running:
+- **Grafana Dashboard:** `http://localhost:${NXTFLOW_GRAFANA_PORT:-3000}/d/nxtflow-overview` (default login: `admin` / `nxtflow`)
+- **Loki API:** `http://localhost:${NXTFLOW_LOKI_PORT:-3100}`
+- **Prometheus UI:** `http://localhost:${NXTFLOW_PROMETHEUS_PORT:-9091}`
+- **MCP Endpoint:** `http://localhost:${NXTFLOW_MCP_PORT:-8000}/mcp`
+- **Send a one-shot test burst:** `python3 scripts/demo-flows.py --once`
+- **Query via containerized CLI (no local Python install required):**
+  `docker compose exec -e NXTFLOW_LOKI_URL=http://loki:3100 nxtflow-mcp nxtflow summary --range 15m`
+
+Customize `docker/enricher/enricher.yaml` to add `wanIps`, `staticHosts`, or `internalCidrs`, and `docker compose up -d --force-recreate enricher` to apply.
+
+---
+
 ## Quick Start (Helm)
 
 ### 1. Standalone (All-in-One)

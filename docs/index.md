@@ -16,6 +16,7 @@ Traditional NetFlow stacks either rely on heavy proprietary appliances or explod
 |---|---|---|
 | `netsampler/goflow2:v2.2.7` | Multi-protocol UDP flow collector (NetFlow v5/v9, IPFIX, sFlow v5) | UDP `:2055`, `:6343`; `-transport=file` JSONL |
 | `nxtflow-enricher` | Sampling scaler, `up`/`down`/`lan` classifier, 7-tier host resolver, gzip Loki shipper | `:8081` (`/ingest`, `/healthz`, `/readyz`), `:9090` (`/metrics`) |
+| `docker-compose.yml` | Turnkey standalone Docker Compose stack (GoFlow2, Enricher, Loki, Prometheus, Grafana, MCP) | `.env.example`, `./scripts/up.sh`, `--profile demo` |
 | `charts/nxtflow` | Dual-mode Helm chart (`standalone`, `integrated`, `collector-only`) | Helm v4, OCI `ghcr.io/nertwork/charts/nxtflow` |
 | `nxtflow-overview.json` | 18-panel multi-site Grafana dashboard with dynamic `site` discovery & Sankey | Grafana 10–13 (`volkovlabs-echarts-panel` or `netsage-sankey-panel`) |
 | `nxtflow` CLI | Fast terminal traffic inspection with table and `--json` output | 11 subcommands (`status`, `summary`, `top-talkers`, `host`, `sessions`, ...) |
