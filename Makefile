@@ -33,4 +33,4 @@ lint:
 	ruff check src tests scripts .github/scripts
 
 audit:
-	python3 scripts/zero_pii_audit.py
+	python3 scripts/security_audit.py

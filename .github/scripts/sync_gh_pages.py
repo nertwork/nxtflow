@@ -12,6 +12,7 @@ from pathlib import Path
 
 PAGES = [
     ("docs/index.md", "index.html", "Overview"),
+    ("docs/docker-compose.md", "docker-compose.html", "Docker Compose"),
     ("docs/architecture.md", "architecture.html", "Architecture"),
     ("docs/standalone-vs-integrated.md", "standalone-vs-integrated.html", "Deployment Modes"),
     ("charts/nxtflow/README.md", "helm-chart.html", "Helm Chart"),
@@ -208,9 +209,7 @@ def main() -> int:
     if src_assets.is_dir():
         dst_assets = out_dir / "assets"
         dst_assets.mkdir(parents=True, exist_ok=True)
-        for item in src_assets.iterdir():
-            if item.is_file():
-                shutil.copy2(item, dst_assets / item.name)
+        shutil.copytree(src_assets, dst_assets, dirs_exist_ok=True)
 
     # Copy raw markdown files for direct linking too
     for src_rel, dest_html, label in PAGES:

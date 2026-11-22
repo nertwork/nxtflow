@@ -15,7 +15,26 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-9ece6a.svg" alt="License: MIT" /></a>
 </p>
 
-**`nxtflow`** is an open-source, Kubernetes-native **NetFlow v5/v9, IPFIX, and sFlow** observability and AI-analysis platform. It pairs upstream [`netsampler/goflow2`](https://github.com/netsampler/goflow2) with a lightweight Python enricher (`nxtflow-enricher`), bounded-cardinality Grafana Loki storage, an 18-panel Grafana dashboard, a terminal CLI (`nxtflow`), and a read-only FastMCP server (`nxtflow-mcp`) so both engineers and AI coding assistants can query network traffic history in seconds.
+**`nxtflow`** is an open-source **NetFlow v5/v9, IPFIX, and sFlow** observability and AI-analysis platform for Docker Compose and Kubernetes. It pairs upstream [`netsampler/goflow2`](https://github.com/netsampler/goflow2) with a lightweight Python enricher (`nxtflow-enricher`), bounded-cardinality Grafana Loki storage, an 18-panel Grafana dashboard, a terminal CLI (`nxtflow`), and a read-only FastMCP server (`nxtflow-mcp`) so both engineers and AI coding assistants can query network traffic history in seconds.
+
+## Dashboard Preview
+
+<p align="center">
+  <img src="assets/screenshots/grafana-overview.png" alt="nxtflow Grafana Overview Dashboard" width="100%" />
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/grafana-flow-analytics.png" alt="nxtflow Grafana Flow Analytics & Top Talkers" width="100%" />
+</p>
+
+<details>
+<summary>View full-page 18-panel Grafana dashboard screenshot</summary>
+
+<p align="center">
+  <img src="assets/screenshots/grafana-overview-full.png" alt="nxtflow Full-Page Grafana Dashboard" width="100%" />
+</p>
+
+</details>
 
 ---
 
@@ -73,6 +92,8 @@ Once running:
   `docker compose exec -e NXTFLOW_LOKI_URL=http://loki:3100 nxtflow-mcp nxtflow summary --range 15m`
 
 Customize `docker/enricher/enricher.yaml` to add `wanIps`, `staticHosts`, or `internalCidrs`, and `docker compose up -d --force-recreate enricher` to apply.
+
+-> **Full Docker Compose Guide:** [docs/docker-compose.md](docs/docker-compose.md) · [nertwork.github.io/nxtflow/docker-compose.html](https://nertwork.github.io/nxtflow/docker-compose.html)
 
 ---
 
@@ -195,6 +216,7 @@ Ready-to-use templates live in [`examples/exporters/`](examples/exporters/):
 Run the local audit, linter, Helm checks, and unit test suite before opening a pull request:
 
 ```bash
+docker compose --env-file .env.example config -q
 python3 scripts/security_audit.py
 ruff check src tests scripts .github/scripts
 helm lint charts/nxtflow
@@ -221,6 +243,7 @@ See [SECURITY.md](SECURITY.md) for architecture details and private vulnerabilit
 Full hosted documentation is automatically published to **[`https://nertwork.github.io/nxtflow/`](https://nertwork.github.io/nxtflow/)**:
 
 - [Documentation Home](docs/index.md)
+- [Docker Compose Deployment Guide](docs/docker-compose.md)
 - [System Architecture](docs/architecture.md)
 - [Standalone vs. Integrated Deployment](docs/standalone-vs-integrated.md)
 - [Helm Chart Reference](charts/nxtflow/README.md)
