@@ -17,7 +17,7 @@ The `charts/nxtflow` Helm chart supports three deployment topologies controlled 
 
 ## 0. Docker Compose (Single-Host / Homelab)
 
-For single-host Docker setups without Kubernetes, use the root `docker-compose.yml` and `.env.example`:
+For single-host Docker setups without Kubernetes, use the root `docker-compose.yml` and `.env.example` — see the full **[Docker Compose Deployment Guide](docker-compose.md)** for the complete `.env` reference, router switching, and troubleshooting:
 
 ```bash
 cp .env.example .env

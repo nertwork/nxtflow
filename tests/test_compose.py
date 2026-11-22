@@ -177,3 +177,26 @@ def test_demo_flows_packet_encoding() -> None:
     data_id, data_len = struct.unpack("!HH", v9[20 + tpl_len : 24 + tpl_len])
     assert data_id == 256
     assert data_len % 4 == 0
+
+
+def test_docs_and_pages_build_includes_docker_compose_and_screenshots(tmp_path: Path) -> None:
+    pytest.importorskip("markdown")
+    assert (REPO_ROOT / "docs" / "docker-compose.md").is_file()
+    for name in ("grafana-overview.png", "grafana-flow-analytics.png", "grafana-overview-full.png"):
+        assert (REPO_ROOT / "assets" / "screenshots" / name).is_file()
+        assert (REPO_ROOT / "docs" / "assets" / "screenshots" / name).is_file()
+
+    site_dir = tmp_path / "_site"
+    res = subprocess.run(
+        [__import__("sys").executable, str(REPO_ROOT / ".github" / "scripts" / "sync_gh_pages.py"), str(site_dir)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert (site_dir / "index.html").is_file()
+    assert (site_dir / "docker-compose.html").is_file()
+    assert (site_dir / "assets" / "screenshots" / "grafana-overview.png").is_file()
+    assert (site_dir / "assets" / "screenshots" / "grafana-flow-analytics.png").is_file()
+    assert (site_dir / "assets" / "screenshots" / "grafana-overview-full.png").is_file()
